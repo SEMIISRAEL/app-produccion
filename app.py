@@ -16,7 +16,7 @@ from reportlab.lib import colors
 st.set_page_config(page_title="Gestor SEMI - Tablet", layout="wide", page_icon="🏗️")
 
 # --- NOMBRES ---
-FILE_ROSTER = "Roster 2025 12 (empty)"
+FILE_ROSTER = "Roster 2025 12 (empty).xlsx"
 FILE_VEHICULOS = "Vehiculos 2"
 FILE_CONFIG_PROD = "ARCHIVOS DE PRODUCION"
 FOLDER_PDF_DRIVE = "PARTES_PDF"
@@ -404,3 +404,4 @@ with tab2:
                             if item_sel not in st.session_state.prod_dia: st.session_state.prod_dia[item_sel] = []
                             st.session_state.prod_dia[item_sel].append("POSTE")
                             st.rerun()
+
