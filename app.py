@@ -57,6 +57,44 @@ def check_login():
 if not check_login(): st.stop()
 
 # ==========================================
+#      CONEXIÓN Y DIAGNÓSTICO
+# ==========================================
+@st.cache_resource
+def get_gspread_client():
+    scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+    creds_dict = dict(st.secrets["gcp_service_account"])
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    client = gspread.authorize(creds)
+    return client
+
+def conectar_por_id(file_id):
+    client = get_gspread_client()
+    try: return client.open_by_key(file_id)
+    except: return None
+
+# --- CONEXIÓN FLEXIBLE (ID o NOMBRE) ---
+def conectar_flexible(referencia):
+    client = get_gspread_client()
+    referencia = str(referencia).strip()
+    
+    # 1. Intento por ID (Si parece un ID largo y sin espacios)
+    if len(referencia) > 20 and " " not in referencia and "." not in referencia:
+        try: return client.open_by_key(referencia)
+        except: pass
+    
+    # 2. Intento por Nombre Exacto
+    try: return client.open(referencia)
+    except: pass
+    
+    # 3. Intento quitando/poniendo .xlsx
+    try:
+        if ".xlsx" in referencia: return client.open(referencia.replace(".xlsx", ""))
+        else: return client.open(referencia + ".xlsx")
+    except: pass
+    
+    return None
+
+# ==========================================
 #      SIDEBAR
 # ==========================================
 @st.cache_data(ttl=300)
@@ -78,6 +116,24 @@ with st.sidebar:
         st.rerun()
     st.markdown("---")
     
+    # --- HERRAMIENTA DE DIAGNÓSTICO ---
+    with st.expander("🕵️‍♂️ Ver archivos del Robot"):
+        if st.button("Escanear Drive"):
+            try:
+                creds_dict = dict(st.secrets["gcp_service_account"])
+                scopes = ['https://www.googleapis.com/auth/drive']
+                creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
+                service = build('drive', 'v3', credentials=creds)
+                results = service.files().list(q="mimeType='application/vnd.google-apps.spreadsheet'", fields="files(id, name)", pageSize=20).execute()
+                items = results.get('files', [])
+                if not items: st.warning("El robot no ve nada.")
+                else:
+                    for f in items:
+                        st.text(f"📄 {f['name']}\n🆔 {f['id']}")
+                        st.markdown("---")
+            except Exception as e:
+                st.error(f"Error: {e}")
+
     archivos_roster = buscar_archivos_roster()
     ID_ROSTER_ACTIVO = None
     if archivos_roster:
@@ -92,43 +148,20 @@ with st.sidebar:
     else: st.error("No hay Rosters.")
 
 # ==========================================
-#           CONEXIÓN 
+#      CACHÉ DATA
 # ==========================================
-@st.cache_resource
-def get_gspread_client():
-    scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-    creds_dict = dict(st.secrets["gcp_service_account"])
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    client = gspread.authorize(creds)
-    return client
-
-def conectar_por_id(file_id):
-    client = get_gspread_client()
-    try: return client.open_by_key(file_id)
-    except: return None
-
-def conectar_por_nombre(nombre_archivo):
-    client = get_gspread_client()
-    try:
-        return client.open(nombre_archivo)
-    except:
-        try:
-            if ".xlsx" in nombre_archivo: return client.open(nombre_archivo.replace(".xlsx", "").strip())
-            else: return client.open(nombre_archivo + ".xlsx")
-        except: return None
-
 @st.cache_data(ttl=600)
-def obtener_hojas_track_cached(nombre_archivo):
-    sh = conectar_por_nombre(nombre_archivo)
+def obtener_hojas_track_cached(referencia):
+    sh = conectar_flexible(referencia)
     if not sh: return None
     try:
         return [ws.title for ws in sh.worksheets() if "HR TRACK" in ws.title.upper()]
     except: return []
 
 @st.cache_data(ttl=600)
-def obtener_mapa_items(nombre_archivo, nombre_hoja):
+def obtener_mapa_items(referencia, nombre_hoja):
     try:
-        sh = conectar_por_nombre(nombre_archivo)
+        sh = conectar_flexible(referencia)
         ws = sh.worksheet(nombre_hoja)
         col_a = ws.col_values(1)
         mapa = {}
@@ -136,8 +169,7 @@ def obtener_mapa_items(nombre_archivo, nombre_hoja):
             if val and len(val)>2 and "ITEM" not in val.upper() and "HR TRACK" not in val.upper():
                 mapa[val] = i + 1
         return mapa
-    except Exception:
-        return {}
+    except: return {}
 
 # ==========================================
 #      EMAIL
@@ -148,18 +180,15 @@ def enviar_email_pdf(pdf_buffer, nombre_archivo, fecha_str, jefe):
         user = st.secrets["email"]["usuario"]
         pwd = st.secrets["email"]["password"]
         dest = st.secrets["email"]["destinatario"]
-        
         msg = MIMEMultipart()
         msg['From'] = user; msg['To'] = dest; msg['Subject'] = f"📄 Parte: {fecha_str} - {jefe}"
         body = f"Fecha: {fecha_str}\nVehículo/Lugar: {jefe}\nUsuario: {st.session_state.user_name}"
         msg.attach(MIMEText(body, 'plain'))
-        
         part = MIMEBase('application', 'octet-stream')
         part.set_payload(pdf_buffer.getvalue())
         encoders.encode_base64(part)
         part.add_header('Content-Disposition', f"attachment; filename= {nombre_archivo}")
         msg.attach(part)
-        
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls(); server.login(user, pwd); server.sendmail(user, dest, msg.as_string()); server.quit()
         return True
@@ -260,8 +289,8 @@ def guardar_parte_en_nube(fecha_dt, lista_trabajadores, vehiculo, datos_paraliza
         return True
     except: return False
 
-def guardar_produccion(archivo_prod, hoja_prod, fila, col, valor):
-    sh = conectar_por_nombre(archivo_prod)
+def guardar_produccion(referencia, hoja_prod, fila, col, valor):
+    sh = conectar_flexible(referencia)
     if not sh: return False
     try:
         ws = sh.worksheet(hoja_prod)
@@ -313,7 +342,6 @@ def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
     
     y_min = height - 400
     while y_cursor > y_min: c.setLineWidth(0.5); c.line(40, y_cursor, 555, y_cursor); y_cursor -= 20
-    
     c.setLineWidth(1)
     for x in x_coords: c.line(x, y_tabla_start + 20, x, y_final - 20)
     c.line(555, y_tabla_start + 20, 555, y_final - 20) 
@@ -440,40 +468,29 @@ with tab2:
             st.info(f"📂 Archivo: {nom_arch}")
             hjs = obtener_hojas_track_cached(nom_arch)
             
-            if hjs is None: st.error("❌ Error conectando archivo.")
+            if hjs is None: st.error(f"❌ Error CRÍTICO: No conecta con '{nom_arch}'. Revisa nombre/permisos.")
             elif not hjs: st.warning("⚠️ Sin hojas HR TRACK.")
             else:
                 hj = st.selectbox("2️⃣ Hoja", hjs, index=None, placeholder="Elige Hoja...")
                 if hj:
-                    # --- AQUÍ ESTÁ EL CAMBIO CLAVE: USAMOS EL MAPA ---
                     mapa = obtener_mapa_items(nom_arch, hj)
-                    
                     fil = st.text_input("🔍 Filtro Km (ej: 52)")
                     opc_items = list(mapa.keys())
                     if fil: opc_items = [i for i in opc_items if fil in str(i)]
-                    
                     it = st.selectbox("3️⃣ Elemento", opc_items)
                     
                     if it:
-                        # Recuperamos la fila DIRECTAMENTE del mapa (Sin leer Excel)
                         r = mapa[it]
-                        
-                        # Ahora leemos SOLO esa fila para ver estados (1 llamada a API)
-                        sh_conn = conectar_por_nombre(nom_arch)
+                        # LEEMOS SOLO LA FILA NECESARIA (Optimización)
+                        sh_conn = conectar_flexible(nom_arch)
                         if sh_conn:
                             ws = sh_conn.worksheet(hj)
-                            # Optimizamos leyendo toda la fila de golpe (row_values)
-                            # row_values devuelve lista indexada en 0 (Col A=0, C=2, E=4...)
                             datos_fila = ws.row_values(r)
-                            
-                            # Función auxiliar para sacar dato seguro (evita index error)
-                            def safe_get(idx):
-                                return datos_fila[idx] if len(datos_fila) > idx else None
+                            def safe_get(idx): return datos_fila[idx] if len(datos_fila) > idx else None
 
                             st.divider()
                             st.markdown(f"### 📍 {it}")
                             
-                            # CIMENTACIÓN (Col C=2, E=4)
                             c1, c2 = st.columns([1, 2])
                             ec, fc = safe_get(2), safe_get(4)
                             c1.info(f"Cim: {ec or '-'}")
@@ -484,8 +501,6 @@ with tab2:
                                 st.session_state.prod_dia[it].append("CIM"); st.rerun()
                                 
                             st.divider()
-                            
-                            # POSTE (Col F=5, H=7)
                             c1, c2 = st.columns([1, 2])
                             ep, fp = safe_get(5), safe_get(7)
                             c1.info(f"Poste: {ep or '-'}")
@@ -496,10 +511,7 @@ with tab2:
                                 st.session_state.prod_dia[it].append("POSTE"); st.rerun()
                                 
                             st.divider()
-                            
-                            # MENSULA (AG=32, AL=37)
                             c1, c2 = st.columns([1, 2])
-                            # 32,33,34 son las columnas de descripcion
                             md1, md2, md3 = safe_get(32), safe_get(33), safe_get(34)
                             m_desc = f"{md1 or ''} {md2 or ''} {md3 or ''}".strip()
                             fm = safe_get(37)
@@ -511,30 +523,21 @@ with tab2:
                                 st.session_state.prod_dia[it].append("MENSULA"); st.rerun()
                                 
                             st.divider()
-                            
-                            # ANCLAJES
-                            # Tipos: R(17), U(20), X(23), AA(26)
-                            # Fechas: T(19), W(22), Z(25), AC(28)
                             st.write("**Anclajes:**")
                             idxs_t, idxs_f = [17, 20, 23, 26], [19, 22, 25, 28]
-                            cols_escritura = [20, 23, 26, 29] # T, W, Z, AC (1-based para gspread)
-                            
+                            cols_escritura = [20, 23, 26, 29]
                             typs, idxs_activos, done = [], [], False
                             for i in range(4):
                                 val = safe_get(idxs_t[i])
                                 if val:
-                                    typs.append(str(val))
-                                    idxs_activos.append(cols_escritura[i])
+                                    typs.append(str(val)); idxs_activos.append(cols_escritura[i])
                                     if safe_get(idxs_f[i]): done = True
-                            
                             c1, c2 = st.columns([1, 2])
                             c1.info(f"Tipos: {', '.join(typs) if typs else 'Ninguno'}")
-                            
                             if not typs: c2.write("-")
                             elif done: c2.success("✅ Ya registrados")
                             elif c2.button("Grabar ANCLAJES", key="b_anc"):
                                 hoy = datetime.now().strftime("%d/%m/%Y")
-                                for col in idxs_activos:
-                                    guardar_produccion(nom_arch, hj, r, col, hoy)
+                                for col in idxs_activos: guardar_produccion(nom_arch, hj, r, col, hoy)
                                 if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
                                 st.session_state.prod_dia[it].append("ANCLAJES"); st.rerun()
