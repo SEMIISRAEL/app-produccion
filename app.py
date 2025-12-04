@@ -49,7 +49,7 @@ st.title("✍️ Fichar en Roster")
 # Formulario
 col1, col2 = st.columns(2)
 # LISTA DE NOMBRES: Puedes ponerlos a mano aquí o leerlos de una hoja aparte
-lista_nombres = ["Juan Pérez", "Ana García", "Pedro López", "Carlos Ruiz", "Operario 5"] 
+lista_nombres = ["GEORGI  IVANOV", "Ana García", "Pedro López", "Carlos Ruiz", "Operario 5"] 
 nombre = col1.selectbox("Operario", lista_nombres)
 fecha = col2.date_input("Fecha", datetime.now())
 horas = st.number_input("Horas", min_value=0.0, max_value=24.0, step=0.5)
@@ -62,3 +62,4 @@ if st.button("GUARDAR", type="primary", use_container_width=True):
         else:
 
             st.error(res)
+
