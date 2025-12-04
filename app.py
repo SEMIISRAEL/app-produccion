@@ -2,27 +2,28 @@ import streamlit as st
 import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
-from google.oauth2 import service_account
 from datetime import datetime, timedelta
 import time
 from io import BytesIO
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email.mime.text import MIMEText
+from email import encoders
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Gestor SEMI - Tablet", layout="wide", page_icon="🏗️")
 
-# --- IDs EXACTOS ---
+# --- IDs EXACTOS DE TUS ARCHIVOS EXCEL ---
 ID_ROSTER = "1ezFvpyTzkL98DJjpXeeGuqbMy_kTZItUC9FDkxFlD08"
 ID_VEHICULOS = "19PWpeCz8pl5NEDpK-omX5AdrLuJgOPrn6uSjtUGomY8"
 ID_CONFIG_PROD = "1uCu5pq6l1CjqXKPEkGkN-G5Z5K00qiV9kR_bGOii6FU"
-ID_FOLDER_PDF = "1U10bffCcFM_nNxlzdyQ4Y8oi9UOW2ByP"
 
 # ==========================================
-#           CONEXIÓN GENERAL
+#           CONEXIÓN SHEETS
 # ==========================================
 @st.cache_resource
 def get_gspread_client():
@@ -43,44 +44,42 @@ def conectar_por_nombre(nombre_archivo):
     except: return None
 
 # ==========================================
-#      SUBIDA ORGANIZADA (BLINDADA)
+#      FUNCIÓN DE ENVÍO DE EMAIL
 # ==========================================
-def subir_pdf_organizado(pdf_buffer, nombre_archivo, fecha_dt):
+def enviar_email_pdf(pdf_buffer, nombre_archivo, fecha_str, jefe):
     try:
-        creds_dict = dict(st.secrets["gcp_service_account"])
-        scopes = ['https://www.googleapis.com/auth/drive']
-        creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
-        service = build('drive', 'v3', credentials=creds)
-        
-        nombre_carpeta_dia = f"DIA {fecha_dt.day:02d}"
-        
-        # Intentamos buscar/crear carpeta
-        try:
-            query = f"mimeType='application/vnd.google-apps.folder' and name='{nombre_carpeta_dia}' and '{ID_FOLDER_PDF}' in parents and trashed=false"
-            results = service.files().list(q=query, fields="files(id)").execute()
-            items = results.get('files', [])
-            
-            if not items:
-                metadata = {'name': nombre_carpeta_dia, 'mimeType': 'application/vnd.google-apps.folder', 'parents': [ID_FOLDER_PDF]}
-                folder = service.files().create(body=metadata, fields='id').execute()
-                daily_folder_id = folder.get('id')
-            else:
-                daily_folder_id = items[0]['id']
-                
-            # Intentamos subir archivo
-            file_metadata = {'name': nombre_archivo, 'parents': [daily_folder_id]}
-            media = MediaIoBaseUpload(pdf_buffer, mimetype='application/pdf', resumable=True)
-            service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-            return "OK"
-            
-        except Exception as e:
-            # Si falla por cuota (espacio), devolvemos el error pero NO rompemos la app
-            if "storageQuotaExceeded" in str(e):
-                return "QUOTA_ERROR"
-            return str(e)
-        
+        # Cargamos datos desde Secrets
+        user = st.secrets["email"]["usuario"]
+        pwd = st.secrets["email"]["password"]
+        dest = st.secrets["email"]["destinatario"]
+
+        msg = MIMEMultipart()
+        msg['From'] = user
+        msg['To'] = dest
+        msg['Subject'] = f"📄 Parte: {fecha_str} - {jefe}"
+
+        body = f"Adjunto el parte de trabajo del día {fecha_str}.\nVehículo/Lugar: {jefe}"
+        msg.attach(MIMEText(body, 'plain'))
+
+        # Adjuntar PDF
+        part = MIMEBase('application', 'octet-stream')
+        part.set_payload(pdf_buffer.getvalue())
+        encoders.encode_base64(part)
+        part.add_header('Content-Disposition', f"attachment; filename= {nombre_archivo}")
+        msg.attach(part)
+
+        # Conexión Segura con Gmail
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(user, pwd)
+        text = msg.as_string()
+        server.sendmail(user, dest, text)
+        server.quit()
+        return True
+
     except Exception as e:
-        return str(e)
+        print(f"Error Email: {e}")
+        return False
 
 # ==========================================
 #      CARGA DE DATOS (CON CACHÉ)
@@ -323,29 +322,30 @@ with tab1:
         dur_p = round((d2 - d1).total_seconds() / 3600, 2)
         d_para = {"inicio": str(hi_p), "fin": str(hf_p), "duracion": max(0, dur_p), "motivo": motivo_p}
 
-    if st.button("💾 GUARDAR TODO (Drive y PDF)", type="primary", use_container_width=True):
+    if st.button("💾 GUARDAR TODO (Excel + Email)", type="primary", use_container_width=True):
         if not st.session_state.lista_sel: st.error("Lista vacía.")
         elif not vehiculo_sel: st.error("Falta seleccionar vehículo.")
-        elif "PON_AQUI" in ID_FOLDER_PDF: st.error("⚠️ Falta el ID de la carpeta PDF en el código.")
         else:
-            with st.spinner("Guardando Datos..."):
-                # 1. Guardar Datos (Esto siempre funciona)
+            with st.spinner("Guardando en la Nube y Enviando Email..."):
+                # 1. Guardar en Excel
                 ok_datos = guardar_parte_en_nube(fecha_sel, st.session_state.lista_sel, vehiculo_sel, d_para)
                 
-                # 2. Intentar Guardar PDF en Nube (Puede fallar por cuota, pero no importa)
+                # 2. Generar PDF
                 pdf_bytes = generar_pdf_bytes(str(fecha_sel.date()), vehiculo_sel, st.session_state.lista_sel, d_para, st.session_state.prod_dia)
                 nombre_pdf = f"Parte_{fecha_sel.strftime('%Y-%m-%d')}_{vehiculo_sel}.pdf"
                 
-                estado_pdf = subir_pdf_organizado(pdf_bytes, nombre_pdf, fecha_sel)
-                
-                if ok_datos:
-                    if estado_pdf == "OK":
-                        st.success(f"✅ ¡Todo Perfecto! Datos guardados y PDF subido a Drive.")
-                    elif estado_pdf == "QUOTA_ERROR":
-                        st.warning("⚠️ Datos guardados en Excel ✅. El PDF NO se subió a Drive porque el Robot no tiene espacio (Cuenta gratuita). Descárgalo aquí abajo 👇")
+                # 3. Enviar Email
+                try:
+                    if "email" in st.secrets:
+                        enviado = enviar_email_pdf(pdf_bytes, nombre_pdf, str(fecha_sel.date()), vehiculo_sel)
+                        msg_email = "📧 Email enviado." if enviado else "⚠️ Fallo al enviar email."
                     else:
-                        st.warning(f"⚠️ Datos guardados en Excel ✅. Error subiendo PDF a Drive: {estado_pdf}")
-                    
+                        msg_email = "⚠️ Faltan datos de Email en Secrets."
+                except:
+                    msg_email = "⚠️ Error configuración email."
+
+                if ok_datos:
+                    st.success(f"✅ ¡Datos guardados en Excel! {msg_email}")
                     st.download_button("📥 Descargar Copia en Tablet", pdf_bytes, nombre_pdf, "application/pdf")
                     st.session_state.lista_sel = []; st.session_state.prod_dia = {}; time.sleep(5); st.rerun()
 
@@ -391,3 +391,5 @@ with tab2:
                             if item_sel not in st.session_state.prod_dia: st.session_state.prod_dia[item_sel] = []
                             st.session_state.prod_dia[item_sel].append("POSTE")
                             st.rerun()
+                            st.rerun()
+
