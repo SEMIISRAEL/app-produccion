@@ -107,22 +107,35 @@ def conectar_por_id(file_id):
     try: return client.open_by_key(file_id)
     except: return None
 
-# --- CONEXIÓN INTELIGENTE (ARREGLA EL PROBLEMA DEL NOMBRE) ---
+# Función robusta para conectar por nombre (intenta con/sin extensión)
 def conectar_por_nombre(nombre_archivo):
     client = get_gspread_client()
     try:
-        # 1. Intento normal
         return client.open(nombre_archivo)
     except:
         try:
-            # 2. Intento quitando .xlsx (El error más común)
             if ".xlsx" in nombre_archivo:
                 return client.open(nombre_archivo.replace(".xlsx", "").strip())
-            # 3. Intento añadiendo .xlsx
             else:
                 return client.open(nombre_archivo + ".xlsx")
         except:
             return None
+
+# ==========================================
+#      NUEVO: LECTURA CACHEADA DE HOJAS
+# ==========================================
+# Esta función es la CLAVE para arreglar tu error 429.
+# Lee las hojas UNA vez y se acuerda por 10 minutos.
+@st.cache_data(ttl=600)
+def obtener_hojas_track(nombre_archivo):
+    sh = conectar_por_nombre(nombre_archivo)
+    if not sh: return []
+    try:
+        # Obtenemos títulos de todas las hojas
+        todas = [ws.title for ws in sh.worksheets()]
+        # Filtramos solo las HR TRACK
+        return [h for h in todas if "HR TRACK" in h.upper()]
+    except: return []
 
 # ==========================================
 #      EMAIL & CARGA DE DATOS
@@ -295,7 +308,6 @@ def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
         c.setLineWidth(0.5); c.line(40, y_cursor, 555, y_cursor); y_cursor -= 20
         if y_cursor < 200: c.showPage(); y_cursor = height - 50
     
-    y_final = y_cursor + 20
     y_min = height - 400
     while y_cursor > y_min: c.setLineWidth(0.5); c.line(40, y_cursor, 555, y_cursor); y_cursor -= 20
     
@@ -385,6 +397,7 @@ with tab1:
                 st.session_state.lista_sel.append({"ID": pid, "Nombre": pnom, "H_Inicio": h_ini.strftime("%H:%M"), "H_Fin": h_fin.strftime("%H:%M"), "Total_Horas": round(ht,2), "Turno_Letra": tl, "Es_Noche": en})
         
         if st.session_state.lista_sel:
+            st.markdown("### 📋 Cuadrilla del Día")
             st.dataframe(pd.DataFrame(st.session_state.lista_sel)[["ID", "Nombre", "Total_Horas", "Turno_Letra"]], use_container_width=True)
             if st.button("Borrar Lista"): st.session_state.lista_sel=[]; st.rerun()
             
@@ -420,104 +433,90 @@ with tab1:
                         st.session_state.lista_sel=[]; st.session_state.prod_dia={}; time.sleep(3); st.rerun()
 
 with tab2:
-    st.header("🏗️ Producción")
+    st.header("🏗️ Control de Producción")
     conf = cargar_config_prod()
     if not conf: st.warning("No config")
     else:
-        # SELECTOR DE TRAMO (NIVEL 1)
         tr = st.selectbox("1️⃣ Tramo", list(conf.keys()), index=None, placeholder="Elige Tramo...")
-        
         if tr:
             nom_arch = conf.get(tr)
             st.info(f"📂 Archivo: {nom_arch}")
+            # --- PROTECCIÓN CACHÉ: Usamos la función optimizada aquí también ---
+            hjs = obtener_hojas_track(nom_arch)
             
-            # Intentamos conectar con ese archivo
-            sh = conectar_por_nombre(nom_arch)
-            
-            if not sh:
-                st.error(f"❌ No encuentro '{nom_arch}' en Drive.")
+            if not hjs:
+                st.warning("No se encontraron hojas HR TRACK.")
             else:
-                # SELECTOR DE HOJA (NIVEL 2)
-                hjs = [w.title for w in sh.worksheets() if "HR TRACK" in w.title.upper()]
                 hj = st.selectbox("2️⃣ Hoja", hjs, index=None, placeholder="Elige Hoja...")
-                
                 if hj:
+                    sh = conectar_por_nombre(nom_arch) # Aquí conectamos solo cuando hace falta
                     ws = sh.worksheet(hj)
                     col_a = ws.col_values(1)
                     items = [x for x in col_a if x and len(x)>2 and "ITEM" not in x and "HR TRACK" not in x]
                     
-                    # Filtro Rápido
                     fil = st.text_input("🔍 Filtro Km (ej: 52)")
                     if fil: items = [i for i in items if fil in i]
-                    
-                    # SELECTOR DE ITEM (NIVEL 3)
                     it = st.selectbox("3️⃣ Elemento", items)
                     
                     if it:
-                        # DETALLES (NIVEL 4)
-                        try:
-                            r = col_a.index(it) + 1 # +1 porque index es 0-based
+                        r = col_a.index(it)+1
+                        st.divider()
+                        st.markdown(f"### 📍 {it}")
+                        
+                        # CIMENTACIÓN
+                        c1, c2 = st.columns([1, 2])
+                        ec, fc = ws.cell(r, 3).value, ws.cell(r, 5).value
+                        c1.info(f"Cim: {ec or '-'}")
+                        if fc: c2.success(f"Hecho: {fc}")
+                        elif c2.button("Grabar CIM", key="b_cim"):
+                            guardar_produccion_celda(nom_arch, hj, r, 5, datetime.now().strftime("%d/%m/%Y"))
+                            if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
+                            st.session_state.prod_dia[it].append("CIM"); st.rerun()
                             
-                            st.divider()
-                            st.markdown(f"### 📍 {it}")
+                        st.divider()
+                        
+                        # POSTE
+                        c1, c2 = st.columns([1, 2])
+                        ep, fp = ws.cell(r, 6).value, ws.cell(r, 8).value
+                        c1.info(f"Poste: {ep or '-'}")
+                        if fp: c2.success(f"Hecho: {fp}")
+                        elif c2.button("Grabar POSTE", key="b_pos"):
+                            guardar_produccion_celda(nom_arch, hj, r, 8, datetime.now().strftime("%d/%m/%Y"))
+                            if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
+                            st.session_state.prod_dia[it].append("POSTE"); st.rerun()
                             
-                            # CIMENTACIÓN
-                            c1, c2 = st.columns([1, 2])
-                            ec, fc = ws.cell(r, 3).value, ws.cell(r, 5).value
-                            c1.info(f"Cim: {ec or '-'}")
-                            if fc: c2.success(f"Hecho: {fc}")
-                            elif c2.button("Grabar CIM", key="b_cim"):
-                                guardar_produccion_celda(nom_arch, hj, r, 5, datetime.now().strftime("%d/%m/%Y"))
-                                if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
-                                st.session_state.prod_dia[it].append("CIM"); st.rerun()
-                                
-                            st.divider()
+                        st.divider()
+                        
+                        # MENSULA
+                        c1, c2 = st.columns([1, 2])
+                        m_desc = f"{ws.cell(r,33).value or ''} {ws.cell(r,34).value or ''}".strip()
+                        fm = ws.cell(r, 38).value
+                        c1.info(f"Ménsula: {m_desc or '-'}")
+                        if fm: c2.success(f"Hecho: {fm}")
+                        elif c2.button("Grabar MENSULA", key="b_men"):
+                            guardar_produccion_celda(nom_arch, hj, r, 38, datetime.now().strftime("%d/%m/%Y"))
+                            if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
+                            st.session_state.prod_dia[it].append("MENSULA"); st.rerun()
                             
-                            # POSTE
-                            c1, c2 = st.columns([1, 2])
-                            ep, fp = ws.cell(r, 6).value, ws.cell(r, 8).value
-                            c1.info(f"Poste: {ep or '-'}")
-                            if fp: c2.success(f"Hecho: {fp}")
-                            elif c2.button("Grabar POSTE", key="b_pos"):
-                                guardar_produccion_celda(nom_arch, hj, r, 8, datetime.now().strftime("%d/%m/%Y"))
-                                if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
-                                st.session_state.prod_dia[it].append("POSTE"); st.rerun()
-                                
-                            st.divider()
-                            
-                            # MENSULA
-                            c1, c2 = st.columns([1, 2])
-                            m_desc = f"{ws.cell(r,33).value or ''} {ws.cell(r,34).value or ''}".strip()
-                            fm = ws.cell(r, 38).value
-                            c1.info(f"Ménsula: {m_desc or '-'}")
-                            if fm: c2.success(f"Hecho: {fm}")
-                            elif c2.button("Grabar MENSULA", key="b_men"):
-                                guardar_produccion_celda(nom_arch, hj, r, 38, datetime.now().strftime("%d/%m/%Y"))
-                                if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
-                                st.session_state.prod_dia[it].append("MENSULA"); st.rerun()
-                                
-                            st.divider()
-                            
-                            # ANCLAJES
-                            st.write("**Anclajes:**")
-                            cols_t, cols_f = [18, 21, 24, 27], [20, 23, 26, 29]
-                            typs, idxs, done = [], [], False
-                            for i in range(4):
-                                v = ws.cell(r, cols_t[i]).value
-                                if v:
-                                    typs.append(str(v)); idxs.append(i)
-                                    if ws.cell(r, cols_f[i]).value: done = True
-                            
-                            c1, c2 = st.columns([1, 2])
-                            c1.info(f"Tipos: {', '.join(typs) if typs else 'Ninguno'}")
-                            
-                            if not typs: c2.write("-")
-                            elif done: c2.success("Hecho")
-                            elif c2.button("Grabar ANCLAJES", key="b_anc"):
-                                hoy = datetime.now().strftime("%d/%m/%Y")
-                                for i in idxs: guardar_produccion_celda(nom_arch, hj, r, cols_f[i], hoy)
-                                if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
-                                st.session_state.prod_dia[it].append("ANCLAJES"); st.rerun()
-
-                        except Exception as e:
-                            st.error(f"Error leyendo fila: {e}")
+                        st.divider()
+                        
+                        # ANCLAJES
+                        st.write("**Anclajes:**")
+                        cols_t, cols_f = [18, 21, 24, 27], [20, 23, 26, 29]
+                        typs, idxs, done = [], [], False
+                        for i in range(4):
+                            v = ws.cell(r, cols_t[i]).value
+                            if v:
+                                typs.append(str(v)); idxs.append(i)
+                                if ws.cell(r, cols_f[i]).value: done = True
+                        
+                        c1, c2 = st.columns([1, 2])
+                        c1.info(f"Tipos: {', '.join(typs) if typs else 'Ninguno'}")
+                        
+                        if not typs: c2.write("-")
+                        elif done: c2.success("✅ Ya registrados")
+                        elif c2.button("Grabar ANCLAJES", key="b_anc"):
+                            hoy = datetime.now().strftime("%d/%m/%Y")
+                            for i in idxs: guardar_produccion_celda(nom_arch, hj, r, cols_f[i], hoy)
+                            if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
+                            st.session_state.prod_dia[it].append("ANCLAJES"); st.rerun()
