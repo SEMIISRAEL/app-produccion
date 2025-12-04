@@ -65,7 +65,6 @@ def cargar_trabajadores():
         datos = ws.get_all_values()
         lista_trabajadores = []
         
-        # Leemos desde fila 9
         for fila in datos[8:]:
             if len(fila) < 2: continue
             
@@ -128,7 +127,8 @@ def guardar_parte_en_nube(fecha_dt, lista_trabajadores, vehiculo, datos_paraliza
             try: ws_para = sh.worksheet("Paralizaciones")
             except: 
                 ws_para = sh.add_worksheet("Paralizaciones", 1000, 10)
-                ws_para.append_row(["Fecha", "Vehiculo", "Inicio", "Fin", "Horas", "Motivo"])
+                # CAMBIO 3: Cabecera en Excel
+                ws_para.append_row(["Fecha", "Vehiculo/Lugar", "Inicio", "Fin", "Horas", "Motivo"])
             
             ws_para.append_row([
                 str(fecha_dt.date()), vehiculo, datos_paralizacion['inicio'], 
@@ -174,7 +174,8 @@ def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
     c.setFont("Helvetica-Bold", 16)
     c.drawString(50, height - 50, "Daily Work Log - SEMI ISRAEL")
     c.setFont("Helvetica", 10)
-    c.drawString(50, height - 80, f"Date: {fecha_str} | Team: {jefe}")
+    # CAMBIO 2: Etiqueta en PDF
+    c.drawString(50, height - 80, f"Date: {fecha_str} | Vehicle/Location: {jefe}")
     
     y = height - 120
     c.setFont("Helvetica-Bold", 9)
@@ -234,13 +235,14 @@ with tab1:
 
     dicc_vehiculos = cargar_vehiculos_dict()
     if dicc_vehiculos:
-        # Añadimos espacio en blanco al vehículo también si quieres
         nombres_veh = [""] + list(dicc_vehiculos.keys())
-        vehiculo_sel = c_veh.selectbox("Vehículo / Encargado", nombres_veh)
+        # CAMBIO 1: Etiqueta en Pantalla
+        vehiculo_sel = c_veh.selectbox("Vehículo / Lugar", nombres_veh)
         info_extra = dicc_vehiculos.get(vehiculo_sel, "")
         c_info.text_input("Detalle", value=info_extra, disabled=True)
     else:
-        vehiculo_sel = c_veh.selectbox("Vehículo", ["Error Carga"])
+        # CAMBIO 1: Etiqueta en Pantalla (Caso Error)
+        vehiculo_sel = c_veh.selectbox("Vehículo / Lugar", ["Error Carga"])
         c_info.text_input("Detalle", disabled=True)
         
     st.divider()
@@ -265,7 +267,6 @@ with tab1:
     if not filtrados:
         opciones_nombres = ["Sin resultados"]
     else:
-        # ¡AQUÍ ESTÁ EL CAMBIO! Añadimos espacio en blanco al principio
         opciones_nombres = [""] + [t['display'] for t in filtrados]
         
     trabajador_sel = c_add1.selectbox("Seleccionar Operario", opciones_nombres)
@@ -278,7 +279,6 @@ with tab1:
     desc_comida = c_add5.checkbox("-1h Comida", value=default_comida)
     
     if st.button("➕ AÑADIR A LA LISTA", use_container_width=True, type="secondary"):
-        # Verificamos que no esté vacío
         if trabajador_sel and trabajador_sel != "Sin resultados" and trabajador_sel != "":
             t_i = datetime.combine(fecha_sel, h_ini)
             t_f = datetime.combine(fecha_sel, h_fin)
@@ -379,4 +379,3 @@ with tab2:
                             if item_sel not in st.session_state.prod_dia: st.session_state.prod_dia[item_sel] = []
                             st.session_state.prod_dia[item_sel].append("POSTE")
                             st.rerun()
-
