@@ -5,7 +5,6 @@ from datetime import datetime
 import time
 
 # --- CONFIGURACIÓN ---
-# EL NOMBRE EXACTO DE TU ARCHIVO EN DRIVE:
 NOMBRE_ARCHIVO_NUBE = 'Roster 2025 12 (empty)' 
 
 # Función de Conexión
@@ -16,42 +15,41 @@ def conectar():
     client = gspread.authorize(creds)
     return client.open(NOMBRE_ARCHIVO_NUBE).sheet1
 
-# --- FUNCIÓN: LEER NOMBRES AUTOMÁTICAMENTE ---
+# --- FUNCIÓN CORREGIDA: LEER COLUMNA B ---
 def obtener_lista_nombres():
     try:
         sh = conectar()
-        # Leemos toda la Columna A (la 1)
-        columna_a = sh.col_values(1)
+        # ¡CORRECCIÓN!: Leemos la Columna B (índice 2), no la A
+        columna_b = sh.col_values(2)
         
-        # Como tu cabecera está en la fila 4, los nombres empiezan en la fila 5.
-        # En Python: índice 0=Fila1, 3=Fila4... empezamos desde el índice 4 (Fila 5)
-        nombres_sucios = columna_a[4:] 
+        # Tu cabecera está en la fila 4, así que los datos empiezan en la 5.
+        # Python cuenta desde 0, así que saltamos los primeros 4 elementos.
+        nombres_sucios = columna_b[4:] 
         
-        # Filtramos para quitar huecos vacíos
+        # Filtramos huecos vacíos
         nombres_limpios = [n for n in nombres_sucios if n != "" and n != None]
         
-        # Ordenamos alfabéticamente para que sea más fácil buscar
         return sorted(nombres_limpios)
     except Exception as e:
         return []
 
-# Función de Escritura (Busca días en Fila 4)
+# Función de Escritura
 def escribir_horas(nombre, fecha, horas):
     try:
         sh = conectar()
         
-        # 1. Buscar Fila del Operario
+        # 1. Buscar al Operario (ahora lo buscará correctamente por nombre)
         cell_nombre = sh.find(nombre)
         if not cell_nombre:
-            return f"❌ No encuentro a '{nombre}' en la Columna A"
+            return f"❌ No encuentro a '{nombre}' en el archivo."
         fila = cell_nombre.row
         
         # 2. Buscar Columna del Día (En la Fila 4)
         dia = str(fecha.day)
-        # in_row=4 obliga a buscar SOLO en la fila 4 (tu cabecera de días)
+        # Busca el día solo en la fila 4
         cell_dia = sh.find(dia, in_row=4) 
         if not cell_dia:
-            return f"❌ No encuentro el día '{dia}' en la Fila 4 (Cabecera)"
+            return f"❌ No encuentro el día '{dia}' en la Fila 4."
         col = cell_dia.col
         
         # 3. Escribir
@@ -60,20 +58,19 @@ def escribir_horas(nombre, fecha, horas):
     except Exception as e:
         return f"Error técnico: {str(e)}"
 
-# --- PANTALLA DE LA TABLET ---
+# --- PANTALLA ---
 st.set_page_config(page_title="Roster 2025", page_icon="📝")
 st.title("📝 Fichar en Roster 2025")
 
 col1, col2 = st.columns(2)
 
-# Cargamos los nombres del Excel automáticamente
-with st.spinner("Cargando personal..."):
+with st.spinner("Cargando nombres de la Columna B..."):
     lista_dinamica = obtener_lista_nombres()
 
 with col1:
     if not lista_dinamica:
-        st.error("⚠️ No pude leer nombres. Revisa que el archivo en Drive sea una 'Hoja de Cálculo de Google' y no un Excel (.xlsx) subido tal cual.")
-        nombre = st.selectbox("Operario", ["Error de lectura"])
+        st.error("⚠️ No encontré nombres. Revisa que el archivo en Drive sea 'Hoja de Google'.")
+        nombre = st.selectbox("Operario", ["Error lectura"])
     else:
         nombre = st.selectbox("Selecciona Operario", lista_dinamica)
 
@@ -84,14 +81,14 @@ with col2:
 st.divider()
 
 if st.button("💾 GUARDAR HORAS", type="primary", use_container_width=True):
-    if nombre == "Error de lectura":
-        st.error("No se puede guardar sin operario.")
+    if nombre == "Error lectura":
+        st.error("No se puede guardar.")
     else:
-        with st.spinner(f"Guardando en {NOMBRE_ARCHIVO_NUBE}..."):
+        with st.spinner(f"Escribiendo en la fila de {nombre}..."):
             res = escribir_horas(nombre, fecha, horas)
             if res == True:
-                st.success(f"✅ ¡Guardado! {horas}h para {nombre} el día {fecha.day}")
-                time.sleep(2) # Pausa para que se vea el mensaje
-                st.rerun() # Recarga para limpiar
+                st.success(f"✅ Guardado: {horas}h para {nombre} (Día {fecha.day})")
+                time.sleep(2)
+                st.rerun()
             else:
                 st.error(res)
