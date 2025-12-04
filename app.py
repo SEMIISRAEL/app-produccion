@@ -15,14 +15,14 @@ from reportlab.lib import colors
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Gestor SEMI - Tablet", layout="wide", page_icon="🏗️")
 
-# --- NOMBRES DE ARCHIVOS ---
+# --- NOMBRES ---
 FILE_ROSTER = "Roster 2025 12 (empty)"
 FILE_VEHICULOS = "Vehiculos 2"
 FILE_CONFIG_PROD = "ARCHIVOS DE PRODUCION"
-FOLDER_PDF_DRIVE = "PARTES_PDF" # Nombre de la carpeta donde se guardarán
+FOLDER_PDF_DRIVE = "PARTES_PDF"
 
 # ==========================================
-#           CONEXIÓN SHEETS (Datos)
+#           CONEXIÓN (CON CACHÉ)
 # ==========================================
 @st.cache_resource
 def get_gspread_client():
@@ -39,46 +39,38 @@ def conectar_hoja(nombre_archivo):
     except Exception as e:
         return None
 
-# ==========================================
-#      NUEVO: SUBIDA A GOOGLE DRIVE
-# ==========================================
 def subir_pdf_a_drive(pdf_buffer, nombre_archivo):
     try:
-        # Usamos autenticación moderna para la API de Drive
         creds_dict = dict(st.secrets["gcp_service_account"])
         scopes = ['https://www.googleapis.com/auth/drive']
         creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
-        
         service = build('drive', 'v3', credentials=creds)
         
-        # 1. Buscar si existe la carpeta "PARTES_PDF"
         query = f"mimeType='application/vnd.google-apps.folder' and name='{FOLDER_PDF_DRIVE}' and trashed=false"
         results = service.files().list(q=query, fields="files(id)").execute()
         items = results.get('files', [])
         
         if not items:
-            # Si no existe, la creamos
             metadata = {'name': FOLDER_PDF_DRIVE, 'mimeType': 'application/vnd.google-apps.folder'}
             folder = service.files().create(body=metadata, fields='id').execute()
             folder_id = folder.get('id')
         else:
             folder_id = items[0]['id']
             
-        # 2. Subir el archivo
         file_metadata = {'name': nombre_archivo, 'parents': [folder_id]}
         media = MediaIoBaseUpload(pdf_buffer, mimetype='application/pdf', resumable=True)
-        
         service.files().create(body=file_metadata, media_body=media, fields='id').execute()
         return True
-        
-    except Exception as e:
-        st.error(f"Error subiendo a Drive: {e}")
-        return False
+    except: return False
 
 # ==========================================
-#        LÓGICA DE CARGA DE DATOS
+#    LÓGICA DE CARGA (¡AHORA CON MEMORIA!)
 # ==========================================
 
+# ttl=600 significa: "Guarda esto en memoria 600 segundos (10 min)". 
+# Así no molestamos a Google todo el rato.
+
+@st.cache_data(ttl=600)
 def cargar_vehiculos_dict():
     sh = conectar_hoja(FILE_VEHICULOS)
     if not sh: return {}
@@ -95,6 +87,7 @@ def cargar_vehiculos_dict():
         return diccionario
     except: return {}
 
+@st.cache_data(ttl=600)
 def cargar_trabajadores():
     sh = conectar_hoja(FILE_ROSTER)
     if not sh: return []
@@ -109,6 +102,7 @@ def cargar_trabajadores():
             if len(fila) < 2: continue
             uid = str(fila[0]).strip()
             nombre = str(fila[1]).strip()
+            
             tipo = "OBRA"
             if len(fila) > 2:
                 marca = str(fila[2]).strip().upper()
@@ -123,10 +117,22 @@ def cargar_trabajadores():
                     "nombre_solo": nombre
                 })
         return lista_trabajadores
-    except Exception as e:
-        st.error(f"Error leyendo roster: {e}")
-        return []
+    except: return []
 
+@st.cache_data(ttl=600)
+def cargar_config_prod():
+    sh = conectar_hoja(FILE_CONFIG_PROD)
+    if not sh: return {}
+    try:
+        datos = sh.sheet1.get_all_values()
+        config = {}
+        for row in datos:
+            if len(row) >= 2 and row[0] and row[1]:
+                config[row[0].strip()] = row[1].strip()
+        return config
+    except: return {}
+
+# Esta NO lleva caché porque necesitamos escribir o leer datos frescos
 def buscar_columna_dia(ws, dia_num):
     header_rows = ws.get_values("E4:AX9") 
     for r_idx, row in enumerate(header_rows):
@@ -138,7 +144,7 @@ def buscar_columna_dia(ws, dia_num):
     return 14 + (dias_dif * 2)
 
 # ==========================================
-#          LÓGICA DE GUARDADO (SHEETS)
+#          LÓGICA DE GUARDADO
 # ==========================================
 
 def guardar_parte_en_nube(fecha_dt, lista_trabajadores, vehiculo, datos_paralizacion):
@@ -173,24 +179,8 @@ def guardar_parte_en_nube(fecha_dt, lista_trabajadores, vehiculo, datos_paraliza
             ])
         return True
     except Exception as e:
-        st.error(f"Error al guardar datos: {e}")
+        st.error(f"Error al guardar: {e}")
         return False
-
-# ==========================================
-#          PRODUCCIÓN Y PDF
-# ==========================================
-
-def cargar_config_prod():
-    sh = conectar_hoja(FILE_CONFIG_PROD)
-    if not sh: return {}
-    try:
-        datos = sh.sheet1.get_all_values()
-        config = {}
-        for row in datos:
-            if len(row) >= 2 and row[0] and row[1]:
-                config[row[0].strip()] = row[1].strip()
-        return config
-    except: return {}
 
 def guardar_produccion(archivo_prod, hoja_prod, fila, col, valor):
     sh = conectar_hoja(archivo_prod)
@@ -200,19 +190,20 @@ def guardar_produccion(archivo_prod, hoja_prod, fila, col, valor):
         ws.update_cell(fila, col, valor)
         return True
     except Exception as e:
-        st.error(f"Error guardando producción: {e}")
+        st.error(f"Error guardando: {e}")
         return False
 
+# ==========================================
+#          PDF GENERATOR
+# ==========================================
 def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
     buffer = BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
     _, height = A4
-    
     c.setFont("Helvetica-Bold", 16)
     c.drawString(50, height - 50, "Daily Work Log - SEMI ISRAEL")
     c.setFont("Helvetica", 10)
     c.drawString(50, height - 80, f"Date: {fecha_str} | Vehicle/Location: {jefe}")
-    
     y = height - 120
     c.setFont("Helvetica-Bold", 9)
     c.drawString(50, y, "ID - Name")
@@ -221,7 +212,6 @@ def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
     c.drawString(450, y, "Shift")
     y -= 15
     c.setFont("Helvetica", 9)
-    
     for t in trabajadores:
         c.drawString(50, y, f"{t['ID']} - {t['Nombre']}"[:45])
         c.drawString(300, y, f"{t['H_Inicio']} - {t['H_Fin']}")
@@ -229,21 +219,18 @@ def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
         c.drawString(450, y, t['Turno_Letra'])
         y -= 15
         if y < 100: c.showPage(); y = height - 50
-            
     if datos_para:
         y -= 20
         c.setFillColor(colors.red)
         c.drawString(50, y, f"⚠️ DELAY: {datos_para['motivo']} ({datos_para['duracion']}h)")
         c.setFillColor(colors.black)
         y -= 40
-        
     if prod_dia:
         c.drawString(50, y - 20, "Production:")
         y -= 35
         for k, v in prod_dia.items():
             c.drawString(60, y, f"- {k}: {', '.join(v)}")
             y -= 15
-            
     c.save()
     buffer.seek(0)
     return buffer
@@ -358,21 +345,15 @@ with tab1:
         elif not vehiculo_sel: st.error("Falta seleccionar vehículo.")
         else:
             with st.spinner("Conectando con Google Drive..."):
-                # 1. Guardar Datos en Excel
                 ok_datos = guardar_parte_en_nube(fecha_sel, st.session_state.lista_sel, vehiculo_sel, d_para)
                 
-                # 2. Generar y Subir PDF
                 pdf_bytes = generar_pdf_bytes(str(fecha_sel.date()), vehiculo_sel, st.session_state.lista_sel, d_para, st.session_state.prod_dia)
                 nombre_pdf = f"Parte_{fecha_sel.strftime('%Y-%m-%d')}_{vehiculo_sel}.pdf"
-                
                 ok_pdf = subir_pdf_a_drive(pdf_bytes, nombre_pdf)
                 
                 if ok_datos and ok_pdf:
-                    st.success(f"✅ ¡Éxito! Datos actualizados y PDF guardado en carpeta 'PARTES_PDF'.")
-                    
-                    # 3. Ofrecer descarga local también
-                    st.download_button("📥 Descargar Copia en Tablet", pdf_bytes, nombre_pdf, "application/pdf")
-                    
+                    st.success(f"✅ ¡Éxito! PDF guardado en 'PARTES_PDF'.")
+                    st.download_button("📥 Descargar Copia", pdf_bytes, nombre_pdf, "application/pdf")
                     st.session_state.lista_sel = []; st.session_state.prod_dia = {}; time.sleep(3); st.rerun()
 
 # ---------------- PESTAÑA 2 ----------------
