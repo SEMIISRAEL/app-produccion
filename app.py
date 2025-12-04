@@ -117,7 +117,6 @@ def conectar_por_nombre(nombre_archivo):
             else: return client.open(nombre_archivo + ".xlsx")
         except: return None
 
-# --- CACHÉ PARA PESTAÑAS ---
 @st.cache_data(ttl=600)
 def obtener_hojas_track_cached(nombre_archivo):
     sh = conectar_por_nombre(nombre_archivo)
@@ -126,35 +125,19 @@ def obtener_hojas_track_cached(nombre_archivo):
         return [ws.title for ws in sh.worksheets() if "HR TRACK" in ws.title.upper()]
     except: return []
 
-# --- NUEVO: MAPA DE ITEMS CACHEADO (SOLUCIÓN DEFINITIVA) ---
-# Devuelve un diccionario: { "NombrePoste": NumeroFila, ... }
 @st.cache_data(ttl=600)
 def obtener_mapa_items(nombre_archivo, nombre_hoja):
     try:
         sh = conectar_por_nombre(nombre_archivo)
         ws = sh.worksheet(nombre_hoja)
-        # Leemos solo columna A una vez
         col_a = ws.col_values(1)
-        
         mapa = {}
         for i, val in enumerate(col_a):
-            # Filtramos basura
             if val and len(val)>2 and "ITEM" not in val.upper() and "HR TRACK" not in val.upper():
-                # Guardamos Nombre -> Fila (i+1 porque gspread es base-1)
                 mapa[val] = i + 1
         return mapa
     except Exception:
-        # Reintento simple
-        time.sleep(2)
-        try:
-            sh = conectar_por_nombre(nombre_archivo)
-            col_a = sh.worksheet(nombre_hoja).col_values(1)
-            mapa = {}
-            for i, val in enumerate(col_a):
-                if val and len(val)>2 and "ITEM" not in val.upper():
-                    mapa[val] = i + 1
-            return mapa
-        except: return {}
+        return {}
 
 # ==========================================
 #      EMAIL
@@ -250,7 +233,7 @@ def buscar_columna_dia(ws, dia_num):
     return 14 + (dias_dif * 2)
 
 # ==========================================
-#          GUARDADO EXCEL
+#          GUARDADO
 # ==========================================
 def guardar_parte_en_nube(fecha_dt, lista_trabajadores, vehiculo, datos_paralizacion, id_roster):
     sh = conectar_por_id(id_roster)
@@ -294,7 +277,9 @@ def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
     c = canvas.Canvas(buffer, pagesize=A4)
     _, height = A4
     start_time, end_time = "________", "________"
-    if trabajadores: start_time, end_time = trabajadores[0]['H_Inicio'], trabajadores[0]['H_Fin']
+    if trabajadores:
+        start_time = trabajadores[0]['H_Inicio']
+        end_time = trabajadores[0]['H_Fin']
 
     y = height - 90
     c.setLineWidth(1); c.rect(40, y - 60, 515, 70) 
@@ -317,7 +302,6 @@ def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
         h_base = 8.0 if t['Total_Horas'] > 8 else t['Total_Horas']
         h_extra = t['Total_Horas'] - 8.0 if t['Total_Horas'] > 8 else 0.0
         col_base = 6 if t['Es_Noche'] else 4
-        
         c.drawString(x_coords[0]+5, y_cursor+6, t['Nombre'][:25])
         c.drawString(x_coords[1]+5, y_cursor+6, str(t['ID']))
         c.drawString(x_coords[2]+5, y_cursor+6, "SEMI")
@@ -357,7 +341,7 @@ def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
     c.save(); buffer.seek(0); return buffer
 
 # ==========================================
-#           INTERFAZ DE USUARIO
+#           INTERFAZ
 # ==========================================
 if 'lista_sel' not in st.session_state: st.session_state.lista_sel = []
 if 'prod_dia' not in st.session_state: st.session_state.prod_dia = {}
@@ -388,12 +372,9 @@ with tab1:
         with st.spinner("Actualizando personal..."):
             all_trab = cargar_trabajadores_disponibles(fecha_sel, ID_ROSTER_ACTIVO)
             
-        if filtro == "ALMACEN": 
-            fil = [t for t in all_trab if t['tipo']=="ALMACEN"]; def_com=True
-        elif filtro == "OBRA": 
-            fil = [t for t in all_trab if t['tipo']!="ALMACEN"]; def_com=False
-        else: 
-            fil = all_trab; def_com=False
+        if filtro == "ALMACEN": fil = [t for t in all_trab if t['tipo']=="ALMACEN"]; def_com=True
+        elif filtro == "OBRA": fil = [t for t in all_trab if t['tipo']!="ALMACEN"]; def_com=False
+        else: fil = all_trab; def_com=False
             
         opc = [""] + [t['display'] for t in fil] if fil else ["Sin personal disponible"]
         trab_sel = c_a1.selectbox("Operario", opc)
@@ -411,7 +392,6 @@ with tab1:
                 en, tl = False, "D"
                 if turno=="N" or (turno=="AUT" and (h_ini.hour>=21 or h_ini.hour<=4)): en, tl = True, "N"
                 if comida: ht = max(0, ht-1)
-                
                 pid = trab_sel.split(" - ")[0]; pnom = trab_sel.split(" - ")[1]
                 st.session_state.lista_sel.append({"ID": pid, "Nombre": pnom, "H_Inicio": h_ini.strftime("%H:%M"), "H_Fin": h_fin.strftime("%H:%M"), "Total_Horas": round(ht,2), "Turno_Letra": tl, "Es_Noche": en})
         
@@ -438,14 +418,12 @@ with tab1:
                     ok = guardar_parte_en_nube(fecha_sel, st.session_state.lista_sel, veh_sel, d_para, ID_ROSTER_ACTIVO)
                     pdf = generar_pdf_bytes(str(fecha_sel.date()), veh_sel, st.session_state.lista_sel, d_para, st.session_state.prod_dia)
                     nm = f"Parte_{fecha_sel.date()}_{veh_sel}.pdf"
-                    
                     try:
                         if "email" in st.secrets: 
                             enviar_email_pdf(pdf, nm, str(fecha_sel.date()), veh_sel)
                             ms = "📧 Email enviado"
                         else: ms = ""
                     except: ms = "⚠️ Error Email"
-                    
                     if ok:
                         st.success(f"✅ Guardado. {ms}")
                         st.download_button("📥 PDF", pdf, nm, "application/pdf")
@@ -454,50 +432,50 @@ with tab1:
 with tab2:
     st.header("🏗️ Control de Producción")
     conf = cargar_config_prod()
-    if not conf: st.warning("⚠️ No se pudo leer 'ARCHIVOS DE PRODUCION'. Revisa en Drive.")
+    if not conf: st.warning("⚠️ No config")
     else:
         tr = st.selectbox("1️⃣ Tramo", list(conf.keys()), index=None, placeholder="Elige Tramo...")
-        
         if tr:
             nom_arch = conf.get(tr)
             st.info(f"📂 Archivo: {nom_arch}")
-            
-            # --- PROTECCIÓN: Leemos lista de hojas con caché ---
             hjs = obtener_hojas_track_cached(nom_arch)
             
-            if hjs is None:
-                st.error(f"❌ Error CRÍTICO: No puedo conectar con '{nom_arch}'.")
-            elif not hjs:
-                st.warning("⚠️ El archivo no tiene pestañas 'HR TRACK'.")
+            if hjs is None: st.error("❌ Error conectando archivo.")
+            elif not hjs: st.warning("⚠️ Sin hojas HR TRACK.")
             else:
                 hj = st.selectbox("2️⃣ Hoja", hjs, index=None, placeholder="Elige Hoja...")
                 if hj:
-                    # --- AQUÍ USAMOS EL MAPA CACHEADO (ADIÓS ERROR 429) ---
-                    # Obtenemos {Nombre: Fila}
-                    mapa_items = obtener_mapa_items(nom_arch, hj)
-                    items_validos = list(mapa_items.keys())
+                    # --- AQUÍ ESTÁ EL CAMBIO CLAVE: USAMOS EL MAPA ---
+                    mapa = obtener_mapa_items(nom_arch, hj)
                     
                     fil = st.text_input("🔍 Filtro Km (ej: 52)")
-                    if fil: items_validos = [i for i in items_validos if fil in str(i)]
+                    opc_items = list(mapa.keys())
+                    if fil: opc_items = [i for i in opc_items if fil in str(i)]
                     
-                    it = st.selectbox("3️⃣ Elemento", items_validos)
+                    it = st.selectbox("3️⃣ Elemento", opc_items)
                     
                     if it:
-                        # Recuperamos la fila de memoria (sin leer Excel)
-                        r = mapa_items[it] 
+                        # Recuperamos la fila DIRECTAMENTE del mapa (Sin leer Excel)
+                        r = mapa[it]
                         
-                        # Ahora sí, leemos esa fila específica para ver el estado actual
-                        # Para leer una fila sola NO hace falta cargar toda la hoja
+                        # Ahora leemos SOLO esa fila para ver estados (1 llamada a API)
                         sh_conn = conectar_por_nombre(nom_arch)
                         if sh_conn:
                             ws = sh_conn.worksheet(hj)
+                            # Optimizamos leyendo toda la fila de golpe (row_values)
+                            # row_values devuelve lista indexada en 0 (Col A=0, C=2, E=4...)
+                            datos_fila = ws.row_values(r)
                             
+                            # Función auxiliar para sacar dato seguro (evita index error)
+                            def safe_get(idx):
+                                return datos_fila[idx] if len(datos_fila) > idx else None
+
                             st.divider()
                             st.markdown(f"### 📍 {it}")
                             
-                            # CIMENTACIÓN
+                            # CIMENTACIÓN (Col C=2, E=4)
                             c1, c2 = st.columns([1, 2])
-                            ec, fc = ws.cell(r, 3).value, ws.cell(r, 5).value
+                            ec, fc = safe_get(2), safe_get(4)
                             c1.info(f"Cim: {ec or '-'}")
                             if fc: c2.success(f"Hecho: {fc}")
                             elif c2.button("Grabar CIM", key="b_cim"):
@@ -507,9 +485,9 @@ with tab2:
                                 
                             st.divider()
                             
-                            # POSTE
+                            # POSTE (Col F=5, H=7)
                             c1, c2 = st.columns([1, 2])
-                            ep, fp = ws.cell(r, 6).value, ws.cell(r, 8).value
+                            ep, fp = safe_get(5), safe_get(7)
                             c1.info(f"Poste: {ep or '-'}")
                             if fp: c2.success(f"Hecho: {fp}")
                             elif c2.button("Grabar POSTE", key="b_pos"):
@@ -519,10 +497,12 @@ with tab2:
                                 
                             st.divider()
                             
-                            # MENSULA
+                            # MENSULA (AG=32, AL=37)
                             c1, c2 = st.columns([1, 2])
-                            m_desc = f"{ws.cell(r,33).value or ''} {ws.cell(r,34).value or ''}".strip()
-                            fm = ws.cell(r, 38).value
+                            # 32,33,34 son las columnas de descripcion
+                            md1, md2, md3 = safe_get(32), safe_get(33), safe_get(34)
+                            m_desc = f"{md1 or ''} {md2 or ''} {md3 or ''}".strip()
+                            fm = safe_get(37)
                             c1.info(f"Ménsula: {m_desc or '-'}")
                             if fm: c2.success(f"Hecho: {fm}")
                             elif c2.button("Grabar MENSULA", key="b_men"):
@@ -533,14 +513,19 @@ with tab2:
                             st.divider()
                             
                             # ANCLAJES
+                            # Tipos: R(17), U(20), X(23), AA(26)
+                            # Fechas: T(19), W(22), Z(25), AC(28)
                             st.write("**Anclajes:**")
-                            cols_t, cols_f = [18, 21, 24, 27], [20, 23, 26, 29]
-                            typs, idxs, done = [], [], False
+                            idxs_t, idxs_f = [17, 20, 23, 26], [19, 22, 25, 28]
+                            cols_escritura = [20, 23, 26, 29] # T, W, Z, AC (1-based para gspread)
+                            
+                            typs, idxs_activos, done = [], [], False
                             for i in range(4):
-                                v = ws.cell(r, cols_t[i]).value
-                                if v:
-                                    typs.append(str(v)); idxs.append(i)
-                                    if ws.cell(r, cols_f[i]).value: done = True
+                                val = safe_get(idxs_t[i])
+                                if val:
+                                    typs.append(str(val))
+                                    idxs_activos.append(cols_escritura[i])
+                                    if safe_get(idxs_f[i]): done = True
                             
                             c1, c2 = st.columns([1, 2])
                             c1.info(f"Tipos: {', '.join(typs) if typs else 'Ninguno'}")
@@ -549,6 +534,7 @@ with tab2:
                             elif done: c2.success("✅ Ya registrados")
                             elif c2.button("Grabar ANCLAJES", key="b_anc"):
                                 hoy = datetime.now().strftime("%d/%m/%Y")
-                                for i in idxs: guardar_produccion(nom_arch, hj, r, cols_f[i], hoy)
+                                for col in idxs_activos:
+                                    guardar_produccion(nom_arch, hj, r, col, hoy)
                                 if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
                                 st.session_state.prod_dia[it].append("ANCLAJES"); st.rerun()
