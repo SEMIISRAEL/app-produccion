@@ -455,13 +455,12 @@ with tab2:
             
             if hjs is None:
                 st.error(f"❌ Error CRÍTICO: No puedo conectar con '{nom_arch}'.")
-                st.write("👉 Revisa que el nombre en el Excel de config coincida EXACTO con el de Drive.")
             elif not hjs:
                 st.warning("⚠️ El archivo no tiene pestañas 'HR TRACK'.")
             else:
                 hj = st.selectbox("2️⃣ Hoja", hjs, index=None, placeholder="Elige Hoja...")
                 if hj:
-                    # AQUÍ SÍ LEEMOS LOS ITEMS (También con caché)
+                    # --- AQUÍ USAMOS LA NUEVA FUNCIÓN CON CACHÉ ---
                     items_validos = obtener_items_produccion(nom_arch, hj)
                     
                     fil = st.text_input("🔍 Filtro Km (ej: 52)")
@@ -474,8 +473,7 @@ with tab2:
                         sh_write = conectar_por_nombre(nom_arch)
                         if sh_write:
                             ws = sh_write.worksheet(hj)
-                            # Buscamos la fila sin caché (para asegurarnos de la posición real)
-                            # Esto es una lectura rápida de col A
+                            # Buscamos la fila sin caché
                             col_a = ws.col_values(1)
                             r = col_a.index(it)+1
                             
