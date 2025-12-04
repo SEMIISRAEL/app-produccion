@@ -12,7 +12,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 
-# --- CONFIGURACIÓN ---
+# --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Gestor SEMI - Tablet", layout="wide", page_icon="🏗️")
 
 # --- IDs DE ARCHIVOS EXCEL (Ya los tenías) ---
@@ -20,9 +20,8 @@ ID_ROSTER = "1ezFvpyTzkL98DJjpXeeGuqbMy_kTZItUC9FDkxFlD08"
 ID_VEHICULOS = "19PWpeCz8pl5NEDpK-omX5AdrLuJgOPrn6uSjtUGomY8"
 ID_CONFIG_PROD = "1uCu5pq6l1CjqXKPEkGkN-G5Z5K00qiV9kR_bGOii6FU"
 
-# --- ¡NUEVO! PEGA AQUÍ EL ID DE TU CARPETA DE PDFS ---
-# (El código raro que sale en la barra de direcciones cuando entras en la carpeta)
-ID_FOLDER_PDF = "19j73aobZKHHGQhLZ0z49nsQp-usmoaMB" 
+# --- ID DE LA CARPETA DE PDFS (CORREGIDO) ---
+ID_FOLDER_PDF = "1U10bffCcFM_nNxlzdyQ4Y8oi9UOW2ByP"
 
 # ==========================================
 #           CONEXIÓN GENERAL
@@ -46,24 +45,43 @@ def conectar_por_nombre(nombre_archivo):
     except: return None
 
 # ==========================================
-#      SUBIDA A DRIVE (POR ID EXACTO)
+#      SUBIDA ORGANIZADA POR DÍAS
 # ==========================================
-def subir_pdf_a_drive(pdf_buffer, nombre_archivo):
+def subir_pdf_organizado(pdf_buffer, nombre_archivo, fecha_dt):
     try:
         creds_dict = dict(st.secrets["gcp_service_account"])
         scopes = ['https://www.googleapis.com/auth/drive']
         creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
         service = build('drive', 'v3', credentials=creds)
         
-        # Subimos directamente a la carpeta por su ID (Sin buscar, tiro fijo)
+        # 1. Definir nombre de la carpeta del día (Ej: "DIA 04")
+        nombre_carpeta_dia = f"DIA {fecha_dt.day:02d}"
+        
+        # 2. Buscar si ya existe esa carpeta DENTRO de la principal (ID_FOLDER_PDF)
+        query = f"mimeType='application/vnd.google-apps.folder' and name='{nombre_carpeta_dia}' and '{ID_FOLDER_PDF}' in parents and trashed=false"
+        results = service.files().list(q=query, fields="files(id)").execute()
+        items = results.get('files', [])
+        
+        if not items:
+            # Si no existe, la creamos DENTRO de la principal
+            metadata = {
+                'name': nombre_carpeta_dia, 
+                'mimeType': 'application/vnd.google-apps.folder',
+                'parents': [ID_FOLDER_PDF] # Aquí le decimos que la meta dentro de la madre
+            }
+            folder = service.files().create(body=metadata, fields='id').execute()
+            daily_folder_id = folder.get('id')
+        else:
+            daily_folder_id = items[0]['id']
+            
+        # 3. Subir el PDF dentro de la carpeta del día
         file_metadata = {
             'name': nombre_archivo, 
-            'parents': [ID_FOLDER_PDF] 
+            'parents': [daily_folder_id] 
         }
         media = MediaIoBaseUpload(pdf_buffer, mimetype='application/pdf', resumable=True)
         
-        archivo = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-        print(f"Subido con ID: {archivo.get('id')}")
+        service.files().create(body=file_metadata, media_body=media, fields='id').execute()
         return True
         
     except Exception as e:
@@ -280,7 +298,6 @@ with tab1:
             
             es_noche = False
             t_letra = "D"
-            
             cond_manual_noche = (turno_manual == "N")
             cond_auto_noche = False
             if turno_manual == "AUT" and (h_ini.hour >= 21 or h_ini.hour <= 4): cond_auto_noche = True
@@ -316,15 +333,17 @@ with tab1:
     if st.button("💾 GUARDAR TODO (Drive y PDF)", type="primary", use_container_width=True):
         if not st.session_state.lista_sel: st.error("Lista vacía.")
         elif not vehiculo_sel: st.error("Falta seleccionar vehículo.")
-        elif ID_FOLDER_PDF == "PON_AQUI_EL_ID_QUE_COPIASTE_DEL_NAVEGADOR": st.error("⚠️ FALTAL EL ID DE LA CARPETA EN EL CÓDIGO.")
         else:
             with st.spinner("Conectando con Google Drive..."):
                 ok_datos = guardar_parte_en_nube(fecha_sel, st.session_state.lista_sel, vehiculo_sel, d_para)
                 pdf_bytes = generar_pdf_bytes(str(fecha_sel.date()), vehiculo_sel, st.session_state.lista_sel, d_para, st.session_state.prod_dia)
                 nombre_pdf = f"Parte_{fecha_sel.strftime('%Y-%m-%d')}_{vehiculo_sel}.pdf"
-                ok_pdf = subir_pdf_a_drive(pdf_bytes, nombre_pdf)
+                
+                # --- NUEVA FUNCIÓN ORGANIZADA ---
+                ok_pdf = subir_pdf_organizado(pdf_bytes, nombre_pdf, fecha_sel)
+                
                 if ok_datos and ok_pdf:
-                    st.success(f"✅ ¡Éxito! PDF guardado en la carpeta de Drive.")
+                    st.success(f"✅ ¡Éxito! PDF guardado en carpeta 'DIA {fecha_sel.day:02d}'.")
                     st.download_button("📥 Descargar Copia", pdf_bytes, nombre_pdf, "application/pdf")
                     st.session_state.lista_sel = []; st.session_state.prod_dia = {}; time.sleep(3); st.rerun()
 
@@ -370,5 +389,6 @@ with tab2:
                             if item_sel not in st.session_state.prod_dia: st.session_state.prod_dia[item_sel] = []
                             st.session_state.prod_dia[item_sel].append("POSTE")
                             st.rerun()
+
 
 
