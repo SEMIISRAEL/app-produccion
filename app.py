@@ -2,6 +2,9 @@ import streamlit as st
 import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
+from google.oauth2 import service_account
 from datetime import datetime, timedelta
 import time
 from io import BytesIO
@@ -12,13 +15,14 @@ from reportlab.lib import colors
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Gestor SEMI - Tablet", layout="wide", page_icon="🏗️")
 
-# --- NOMBRES EXACTOS DE ARCHIVOS EN GOOGLE DRIVE ---
+# --- NOMBRES DE ARCHIVOS ---
 FILE_ROSTER = "Roster 2025 12 (empty)"
 FILE_VEHICULOS = "Vehiculos 2"
 FILE_CONFIG_PROD = "ARCHIVOS DE PRODUCION"
+FOLDER_PDF_DRIVE = "PARTES_PDF" # Nombre de la carpeta donde se guardarán
 
 # ==========================================
-#           CONEXIÓN Y SEGURIDAD
+#           CONEXIÓN SHEETS (Datos)
 # ==========================================
 @st.cache_resource
 def get_gspread_client():
@@ -34,6 +38,42 @@ def conectar_hoja(nombre_archivo):
         return client.open(nombre_archivo)
     except Exception as e:
         return None
+
+# ==========================================
+#      NUEVO: SUBIDA A GOOGLE DRIVE
+# ==========================================
+def subir_pdf_a_drive(pdf_buffer, nombre_archivo):
+    try:
+        # Usamos autenticación moderna para la API de Drive
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        scopes = ['https://www.googleapis.com/auth/drive']
+        creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
+        
+        service = build('drive', 'v3', credentials=creds)
+        
+        # 1. Buscar si existe la carpeta "PARTES_PDF"
+        query = f"mimeType='application/vnd.google-apps.folder' and name='{FOLDER_PDF_DRIVE}' and trashed=false"
+        results = service.files().list(q=query, fields="files(id)").execute()
+        items = results.get('files', [])
+        
+        if not items:
+            # Si no existe, la creamos
+            metadata = {'name': FOLDER_PDF_DRIVE, 'mimeType': 'application/vnd.google-apps.folder'}
+            folder = service.files().create(body=metadata, fields='id').execute()
+            folder_id = folder.get('id')
+        else:
+            folder_id = items[0]['id']
+            
+        # 2. Subir el archivo
+        file_metadata = {'name': nombre_archivo, 'parents': [folder_id]}
+        media = MediaIoBaseUpload(pdf_buffer, mimetype='application/pdf', resumable=True)
+        
+        service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+        return True
+        
+    except Exception as e:
+        st.error(f"Error subiendo a Drive: {e}")
+        return False
 
 # ==========================================
 #        LÓGICA DE CARGA DE DATOS
@@ -67,10 +107,8 @@ def cargar_trabajadores():
         
         for fila in datos[8:]:
             if len(fila) < 2: continue
-            
             uid = str(fila[0]).strip()
             nombre = str(fila[1]).strip()
-            
             tipo = "OBRA"
             if len(fila) > 2:
                 marca = str(fila[2]).strip().upper()
@@ -100,7 +138,7 @@ def buscar_columna_dia(ws, dia_num):
     return 14 + (dias_dif * 2)
 
 # ==========================================
-#          LÓGICA DE GUARDADO
+#          LÓGICA DE GUARDADO (SHEETS)
 # ==========================================
 
 def guardar_parte_en_nube(fecha_dt, lista_trabajadores, vehiculo, datos_paralizacion):
@@ -127,7 +165,6 @@ def guardar_parte_en_nube(fecha_dt, lista_trabajadores, vehiculo, datos_paraliza
             try: ws_para = sh.worksheet("Paralizaciones")
             except: 
                 ws_para = sh.add_worksheet("Paralizaciones", 1000, 10)
-                # CAMBIO 3: Cabecera en Excel
                 ws_para.append_row(["Fecha", "Vehiculo/Lugar", "Inicio", "Fin", "Horas", "Motivo"])
             
             ws_para.append_row([
@@ -136,7 +173,7 @@ def guardar_parte_en_nube(fecha_dt, lista_trabajadores, vehiculo, datos_paraliza
             ])
         return True
     except Exception as e:
-        st.error(f"Error al guardar: {e}")
+        st.error(f"Error al guardar datos: {e}")
         return False
 
 # ==========================================
@@ -174,7 +211,6 @@ def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
     c.setFont("Helvetica-Bold", 16)
     c.drawString(50, height - 50, "Daily Work Log - SEMI ISRAEL")
     c.setFont("Helvetica", 10)
-    # CAMBIO 2: Etiqueta en PDF
     c.drawString(50, height - 80, f"Date: {fecha_str} | Vehicle/Location: {jefe}")
     
     y = height - 120
@@ -236,12 +272,10 @@ with tab1:
     dicc_vehiculos = cargar_vehiculos_dict()
     if dicc_vehiculos:
         nombres_veh = [""] + list(dicc_vehiculos.keys())
-        # CAMBIO 1: Etiqueta en Pantalla
         vehiculo_sel = c_veh.selectbox("Vehículo / Lugar", nombres_veh)
         info_extra = dicc_vehiculos.get(vehiculo_sel, "")
         c_info.text_input("Detalle", value=info_extra, disabled=True)
     else:
-        # CAMBIO 1: Etiqueta en Pantalla (Caso Error)
         vehiculo_sel = c_veh.selectbox("Vehículo / Lugar", ["Error Carga"])
         c_info.text_input("Detalle", disabled=True)
         
@@ -298,7 +332,7 @@ with tab1:
                 "Total_Horas": round(horas, 2), "Turno_Letra": t_letra, "Es_Noche": es_noche
             })
         else:
-            st.warning("⚠️ Por favor, selecciona un operario de la lista.")
+            st.warning("Selecciona un operario.")
 
     if st.session_state.lista_sel:
         st.markdown("### 📋 Cuadrilla del Día")
@@ -319,17 +353,27 @@ with tab1:
         dur_p = round((d2 - d1).total_seconds() / 3600, 2)
         d_para = {"inicio": str(hi_p), "fin": str(hf_p), "duracion": max(0, dur_p), "motivo": motivo_p}
 
-    if st.button("💾 GUARDAR PARTE", type="primary", use_container_width=True):
+    if st.button("💾 GUARDAR TODO (Drive y PDF)", type="primary", use_container_width=True):
         if not st.session_state.lista_sel: st.error("Lista vacía.")
         elif not vehiculo_sel: st.error("Falta seleccionar vehículo.")
         else:
-            with st.spinner("Guardando..."):
-                ok = guardar_parte_en_nube(fecha_sel, st.session_state.lista_sel, vehiculo_sel, d_para)
-                if ok:
-                    pdf = generar_pdf_bytes(str(fecha_sel.date()), vehiculo_sel, st.session_state.lista_sel, d_para, st.session_state.prod_dia)
-                    st.success("¡Guardado!")
-                    st.download_button("📥 Descargar PDF", pdf, f"Parte_{fecha_sel.date()}.pdf", "application/pdf")
-                    st.session_state.lista_sel = []; st.session_state.prod_dia = {}; time.sleep(2); st.rerun()
+            with st.spinner("Conectando con Google Drive..."):
+                # 1. Guardar Datos en Excel
+                ok_datos = guardar_parte_en_nube(fecha_sel, st.session_state.lista_sel, vehiculo_sel, d_para)
+                
+                # 2. Generar y Subir PDF
+                pdf_bytes = generar_pdf_bytes(str(fecha_sel.date()), vehiculo_sel, st.session_state.lista_sel, d_para, st.session_state.prod_dia)
+                nombre_pdf = f"Parte_{fecha_sel.strftime('%Y-%m-%d')}_{vehiculo_sel}.pdf"
+                
+                ok_pdf = subir_pdf_a_drive(pdf_bytes, nombre_pdf)
+                
+                if ok_datos and ok_pdf:
+                    st.success(f"✅ ¡Éxito! Datos actualizados y PDF guardado en carpeta 'PARTES_PDF'.")
+                    
+                    # 3. Ofrecer descarga local también
+                    st.download_button("📥 Descargar Copia en Tablet", pdf_bytes, nombre_pdf, "application/pdf")
+                    
+                    st.session_state.lista_sel = []; st.session_state.prod_dia = {}; time.sleep(3); st.rerun()
 
 # ---------------- PESTAÑA 2 ----------------
 with tab2:
