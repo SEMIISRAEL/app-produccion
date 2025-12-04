@@ -18,11 +18,100 @@ from email.mime.text import MIMEText
 from email import encoders
 
 # --- CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(page_title="Gestor SEMI - Tablet", layout="wide", page_icon="🏗️")
+st.set_page_config(page_title="Gestor SEMI - Tablet", layout="wide", page_icon="🔒")
 
-# --- IDs FIJOS (Solo los que no cambian cada mes) ---
+# --- IDs FIJOS ---
 ID_VEHICULOS = "19PWpeCz8pl5NEDpK-omX5AdrLuJgOPrn6uSjtUGomY8"
 ID_CONFIG_PROD = "1uCu5pq6l1CjqXKPEkGkN-G5Z5K00qiV9kR_bGOii6FU"
+
+# ==========================================
+#           SISTEMA DE LOGIN
+# ==========================================
+def check_login():
+    if 'logged_in' not in st.session_state:
+        st.session_state.logged_in = False
+        st.session_state.user_role = None
+        st.session_state.user_name = None
+
+    if not st.session_state.logged_in:
+        st.markdown("<h1 style='text-align: center;'>🔐 Acceso Restringido</h1>", unsafe_allow_html=True)
+        c1, c2, c3 = st.columns([1, 2, 1])
+        with c2:
+            st.info("Inicia sesión para continuar")
+            usuario = st.text_input("Usuario")
+            password = st.text_input("Contraseña", type="password")
+            
+            if st.button("Entrar", type="primary", use_container_width=True):
+                try:
+                    users_db = st.secrets["usuarios"]
+                    roles_db = st.secrets["roles"]
+                    
+                    if usuario in users_db and users_db[usuario] == password:
+                        st.session_state.logged_in = True
+                        st.session_state.user_name = usuario
+                        st.session_state.user_role = roles_db.get(usuario, "invitado")
+                        st.success("¡Bienvenido!")
+                        st.rerun()
+                    else:
+                        st.error("❌ Usuario o contraseña incorrectos")
+                except:
+                    st.error("⚠️ Error: No se han configurado usuarios en Secrets.")
+        return False
+    return True
+
+if not check_login():
+    st.stop()
+
+# ==========================================
+#      CONFIGURACIÓN Y SIDEBAR
+# ==========================================
+
+# --- FUNCIÓN DE BÚSQUEDA DE ARCHIVOS ROSTER ---
+@st.cache_data(ttl=300)
+def buscar_archivos_roster():
+    try:
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        scopes = ['https://www.googleapis.com/auth/drive']
+        creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
+        service = build('drive', 'v3', credentials=creds)
+        # Busca archivos que contengan 'Roster' y ordena por nombre descendente (el más nuevo primero)
+        query = "name contains 'Roster' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false"
+        results = service.files().list(q=query, fields="files(id, name)", orderBy="name desc").execute()
+        items = results.get('files', [])
+        return {f['name']: f['id'] for f in items}
+    except: return {}
+
+# --- BARRA LATERAL ---
+with st.sidebar:
+    st.write(f"👤 **{st.session_state.user_name.upper()}** ({st.session_state.user_role.upper()})")
+    
+    if st.button("Cerrar Sesión"):
+        st.session_state.logged_in = False
+        st.rerun()
+    
+    st.markdown("---")
+    
+    # BUSCAMOS LOS ARCHIVOS
+    archivos_roster = buscar_archivos_roster()
+    ID_ROSTER_ACTIVO = None
+    nombre_roster_sel = "Desconocido"
+
+    if archivos_roster:
+        # --- LÓGICA DE SEGURIDAD ---
+        if st.session_state.user_role == "admin":
+            # EL ADMIN: Ve el menú y elige
+            st.header("🗂️ Configuración (Solo Admin)")
+            nombre_roster_sel = st.selectbox("Archivo de Horas:", list(archivos_roster.keys()))
+            ID_ROSTER_ACTIVO = archivos_roster[nombre_roster_sel]
+            st.success(f"Editando: {nombre_roster_sel}")
+        else:
+            # EL ENCARGADO: No ve menú. Se selecciona AUTOMÁTICAMENTE el primero (el más nuevo)
+            nombre_roster_sel = list(archivos_roster.keys())[0]
+            ID_ROSTER_ACTIVO = archivos_roster[nombre_roster_sel]
+            # Opcional: Mostrar qué archivo se está usando (solo lectura)
+            # st.info(f"📂 Archivo actual: {nombre_roster_sel}") 
+    else:
+        st.error("No se encontraron archivos Roster.")
 
 # ==========================================
 #           CONEXIÓN 
@@ -46,30 +135,6 @@ def conectar_por_nombre(nombre_archivo):
     except: return None
 
 # ==========================================
-#      NUEVO: BUSCADOR DE ROSTERS
-# ==========================================
-@st.cache_data(ttl=300) # Cache de 5 min para no buscar todo el rato
-def buscar_archivos_roster():
-    """Busca en Drive todos los archivos que contengan la palabra 'Roster' en el nombre"""
-    try:
-        creds_dict = dict(st.secrets["gcp_service_account"])
-        scopes = ['https://www.googleapis.com/auth/drive']
-        creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
-        service = build('drive', 'v3', credentials=creds)
-        
-        # Query: Nombre contiene 'Roster' Y no está en la papelera Y es una hoja de cálculo
-        query = "name contains 'Roster' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false"
-        
-        results = service.files().list(q=query, fields="files(id, name)", orderBy="name desc").execute()
-        items = results.get('files', [])
-        
-        # Devuelve diccionario { "Nombre Archivo": "ID" }
-        return {f['name']: f['id'] for f in items}
-    except Exception as e:
-        st.sidebar.error(f"Error buscando Rosters: {e}")
-        return {}
-
-# ==========================================
 #      ENVÍO EMAIL
 # ==========================================
 def enviar_email_pdf(pdf_buffer, nombre_archivo, fecha_str, jefe):
@@ -84,7 +149,7 @@ def enviar_email_pdf(pdf_buffer, nombre_archivo, fecha_str, jefe):
         msg['To'] = dest
         msg['Subject'] = f"📄 Parte: {fecha_str} - {jefe}"
         
-        body = f"Adjunto parte de trabajo.\nFecha: {fecha_str}\nVehículo/Lugar: {jefe}"
+        body = f"Adjunto parte de trabajo.\nFecha: {fecha_str}\nVehículo/Lugar: {jefe}\nUsuario App: {st.session_state.user_name}"
         msg.attach(MIMEText(body, 'plain'))
 
         part = MIMEBase('application', 'octet-stream')
@@ -122,11 +187,10 @@ def cargar_vehiculos_dict():
         return diccionario
     except: return {}
 
-# AHORA RECIBE EL ID DEL ROSTER COMO ARGUMENTO (DINÁMICO)
-def cargar_trabajadores_disponibles(fecha_dt, id_roster_activo):
-    if not id_roster_activo: return []
-    
-    sh = conectar_por_id(id_roster_activo)
+# CARGA TRABAJADORES (Depende del ID_ROSTER_ACTIVO)
+def cargar_trabajadores_disponibles(fecha_dt, id_roster):
+    if not id_roster: return []
+    sh = conectar_por_id(id_roster)
     if not sh: return []
     try:
         try: ws = sh.worksheet("Roster")
@@ -142,11 +206,12 @@ def cargar_trabajadores_disponibles(fecha_dt, id_roster_activo):
             uid = str(fila[0]).strip()
             nombre = str(fila[1]).strip()
             
-            # Chequeo si ya fichó
+            # FILTRO: ¿YA FICHÓ?
             registrado = False
             if len(fila) > idx_dia:
                 val = str(fila[idx_dia]).strip()
                 if val and val not in ["", "None"]: registrado = True
+            
             if registrado: continue 
             
             tipo = "OBRA"
@@ -183,8 +248,8 @@ def buscar_columna_dia(ws, dia_num):
 # ==========================================
 #          GUARDADO EXCEL
 # ==========================================
-def guardar_parte_en_nube(fecha_dt, lista_trabajadores, vehiculo, datos_paralizacion, id_roster_activo):
-    sh = conectar_por_id(id_roster_activo)
+def guardar_parte_en_nube(fecha_dt, lista_trabajadores, vehiculo, datos_paralizacion, id_roster):
+    sh = conectar_por_id(id_roster)
     if not sh: return False
     try:
         try: ws = sh.worksheet("Roster")
@@ -204,8 +269,8 @@ def guardar_parte_en_nube(fecha_dt, lista_trabajadores, vehiculo, datos_paraliza
             try: ws_para = sh.worksheet("Paralizaciones")
             except: 
                 ws_para = sh.add_worksheet("Paralizaciones", 1000, 10)
-                ws_para.append_row(["Fecha", "Vehiculo/Lugar", "Inicio", "Fin", "Horas", "Motivo"])
-            ws_para.append_row([str(fecha_dt.date()), vehiculo, datos_paralizacion['inicio'], datos_paralizacion['fin'], datos_paralizacion['duracion'], datos_paralizacion['motivo']])
+                ws_para.append_row(["Fecha", "Vehiculo/Lugar", "Inicio", "Fin", "Horas", "Motivo", "Usuario"])
+            ws_para.append_row([str(fecha_dt.date()), vehiculo, datos_paralizacion['inicio'], datos_paralizacion['fin'], datos_paralizacion['duracion'], datos_paralizacion['motivo'], st.session_state.user_name])
         return True
     except: return False
 
@@ -219,7 +284,7 @@ def guardar_produccion(archivo_prod, hoja_prod, fila, col, valor):
     except: return False
 
 # ==========================================
-#      GENERADOR PDF
+#      GENERADOR PDF (DISEÑO PROFESIONAL)
 # ==========================================
 def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
     buffer = BytesIO()
@@ -247,7 +312,7 @@ def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
 
     y_cursor = y - 80
     c.setFillColor(colors.HexColor("#2980B9"))
-    c.rect(40, y_cursor, 515, 20, fill=1)
+    c.rect(40, y_cursor, 515, 20, fill=1) 
     c.setFillColor(colors.white)
     c.setFont("Helvetica-Bold", 8)
     
@@ -339,26 +404,12 @@ def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
 if 'lista_sel' not in st.session_state: st.session_state.lista_sel = []
 if 'prod_dia' not in st.session_state: st.session_state.prod_dia = {}
 
-# --- SIDEBAR: SELECCIÓN DE ROSTER ---
-with st.sidebar:
-    st.header("🗂️ Configuración del Mes")
-    archivos_roster = buscar_archivos_roster()
-    
-    if archivos_roster:
-        nombre_roster_sel = st.selectbox("Selecciona Archivo de Horas:", list(archivos_roster.keys()))
-        ID_ROSTER_ACTIVO = archivos_roster[nombre_roster_sel]
-        st.success(f"Conectado a: {nombre_roster_sel}")
-    else:
-        st.error("No se encontraron archivos 'Roster' en Drive.")
-        ID_ROSTER_ACTIVO = None
-
-# --- PESTAÑAS PRINCIPALES ---
 tab1, tab2 = st.tabs(["📝 Partes de Trabajo", "🏗️ Producción"])
 
 # ---------------- PESTAÑA 1 ----------------
 with tab1:
     if not ID_ROSTER_ACTIVO:
-        st.warning("⚠️ Debes seleccionar un archivo Roster en el menú de la izquierda.")
+        st.warning("⚠️ No hay archivo Roster disponible.")
     else:
         st.subheader("Datos Generales")
         c_f1, c_f2, c_f3, c_veh, c_info = st.columns([1, 1, 1, 2, 2])
@@ -385,8 +436,8 @@ with tab1:
         filtro = st.radio("Filtro", ["TODOS", "OBRA", "ALMACEN"], horizontal=True, label_visibility="collapsed")
         c_add1, c_add2, c_add3, c_add4, c_add5 = st.columns([3, 1, 1, 1, 1])
         
-        # CARGA INTELIGENTE CON ID ACTIVO
-        with st.spinner("Actualizando personal..."):
+        with st.spinner("Actualizando personal disponible..."):
+            # USAMOS EL ID DEL ROSTER ELEGIDO (ADMIN) O EL AUTOMÁTICO
             todos_trabajadores = cargar_trabajadores_disponibles(fecha_sel, ID_ROSTER_ACTIVO)
         
         if filtro == "ALMACEN":
@@ -451,8 +502,7 @@ with tab1:
             if not st.session_state.lista_sel: st.error("Lista vacía.")
             elif not vehiculo_sel: st.error("Falta seleccionar vehículo.")
             else:
-                with st.spinner("Guardando..."):
-                    # PASAMOS EL ID DEL ROSTER SELECCIONADO
+                with st.spinner("Guardando en la Nube y Enviando Email..."):
                     ok_datos = guardar_parte_en_nube(fecha_sel, st.session_state.lista_sel, vehiculo_sel, d_para, ID_ROSTER_ACTIVO)
                     
                     pdf_bytes = generar_pdf_bytes(str(fecha_sel.date()), vehiculo_sel, st.session_state.lista_sel, d_para, st.session_state.prod_dia)
