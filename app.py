@@ -352,7 +352,7 @@ with tab1:
         else: 
             fil = all_trab; def_com=False
             
-        opc = [""] + [t['display'] for t in fil] if fil else ["Sin personal"]
+        opc = [""] + [t['display'] for t in fil] if fil else ["Sin personal disponible"]
         trab_sel = c_a1.selectbox("Operario", opc)
         
         h_ini = c_a2.time_input("Inicio", datetime.strptime("07:00", "%H:%M").time())
@@ -361,15 +361,156 @@ with tab1:
         comida = c_a5.checkbox("-1h Comida", value=def_com)
         
         if st.button("➕ AÑADIR", type="secondary", use_container_width=True):
-            if trab_sel and trab_sel not in ["", "Sin personal"]:
+            if trab_sel and trab_sel not in ["", "Sin personal disponible"]:
                 t1 = datetime.combine(fecha_sel, h_ini); t2 = datetime.combine(fecha_sel, h_fin)
                 if t2 < t1: t2 += timedelta(days=1)
                 ht = (t2-t1).seconds/3600
                 en, tl = False, "D"
-                if turno=="N" or (turno=="AUT" and (h_ini.hour>=21 or h_ini.hour<=4)): en, tl = True, "N"
+                # CORRECCIÓN DE LA LÓGICA DE HORA NOCHE (PARÉNTESIS ARREGLADO)
+                cond_man_noc = (turno == "N")
+                cond_aut_noc = False
+                if turno == "AUT":
+                    if h_ini.hour >= 21 or h_ini.hour <= 4:
+                        cond_aut_noc = True
+                
+                if cond_man_noc or cond_aut_noc:
+                    en, tl = True, "N"
+                
                 if comida: ht = max(0, ht-1)
                 
                 pid = trab_sel.split(" - ")[0]; pnom = trab_sel.split(" - ")[1]
                 st.session_state.lista_sel.append({"ID": pid, "Nombre": pnom, "H_Inicio": h_ini.strftime("%H:%M"), "H_Fin": h_fin.strftime("%H:%M"), "Total_Horas": round(ht,2), "Turno_Letra": tl, "Es_Noche": en})
         
-        if st.session_state.lista_sel
+        if st.session_state.lista_sel:
+            # Aquí estaba el if que te dio error antes, ahora tiene los dos puntos correctos
+            st.markdown("### 📋 Cuadrilla del Día")
+            st.dataframe(pd.DataFrame(st.session_state.lista_sel)[["ID", "Nombre", "Total_Horas", "Turno_Letra"]], use_container_width=True)
+            if st.button("Borrar Lista"): st.session_state.lista_sel=[]; st.rerun()
+            
+        st.divider()
+        para = st.checkbox("🛑 Paralización")
+        d_para = None
+        if para:
+            cp1, cp2, cp3 = st.columns([1,1,2])
+            pi = cp1.time_input("Ini Parada"); pf = cp2.time_input("Fin Parada"); pm = cp3.text_input("Motivo")
+            d1, d2 = datetime.combine(hoy, pi), datetime.combine(hoy, pf)
+            durp = round((d2-d1).seconds/3600, 2)
+            d_para = {"inicio": str(pi), "fin": str(pf), "duracion": durp, "motivo": pm}
+            
+        if st.button("💾 GUARDAR TODO", type="primary", use_container_width=True):
+            if not st.session_state.lista_sel: st.error("Lista vacía")
+            elif not veh_sel: st.error("Elige vehículo")
+            else:
+                with st.spinner("Guardando..."):
+                    ok = guardar_parte_en_nube(fecha_sel, st.session_state.lista_sel, veh_sel, d_para, ID_ROSTER_ACTIVO)
+                    pdf = generar_pdf_bytes(str(fecha_sel.date()), veh_sel, st.session_state.lista_sel, d_para, st.session_state.prod_dia)
+                    nm = f"Parte_{fecha_sel.date()}_{veh_sel}.pdf"
+                    
+                    try:
+                        if "email" in st.secrets: 
+                            enviar_email_pdf(pdf, nm, str(fecha_sel.date()), veh_sel)
+                            ms = "📧 Email enviado"
+                        else: ms = ""
+                    except: ms = "⚠️ Error Email"
+                    
+                    if ok:
+                        st.success(f"✅ Guardado. {ms}")
+                        st.download_button("📥 PDF", pdf, nm, "application/pdf")
+                        st.session_state.lista_sel=[]; st.session_state.prod_dia={}; time.sleep(3); st.rerun()
+
+with tab2:
+    st.header("🏗️ Producción")
+    conf = cargar_config_prod()
+    if not conf: st.warning("No config")
+    else:
+        tr = st.selectbox("Tramo", list(conf.keys()))
+        nom_arch = conf.get(tr)
+        if nom_arch:
+            sh = conectar_por_nombre(nom_arch)
+            if sh:
+                hjs = [w.title for w in sh.worksheets() if "HR TRACK" in w.title.upper()]
+                hj = st.selectbox("Hoja", hjs) if hjs else None
+                if hj:
+                    ws = sh.worksheet(hj)
+                    col_a = ws.col_values(1)
+                    items = [x for x in col_a if x and len(x)>2 and "ITEM" not in x]
+                    fil = st.text_input("Filtro Km")
+                    if fil: items = [i for i in items if fil in i]
+                    it = st.selectbox("Elemento", items)
+                    
+                    if it:
+                        r = col_a.index(it)+1
+                        st.markdown(f"### {it}")
+                        
+                        # CIMENTACIÓN
+                        c1, c2 = st.columns(2)
+                        ec, fc = ws.cell(r, 3).value, ws.cell(r, 5).value
+                        c1.metric("Cim", str(ec) if ec else "-")
+                        if fc: c2.success(f"Hecho: {fc}")
+                        elif c2.button("✅ Marcar CIM"):
+                            guardar_produccion_celda(nom_arch, hj, r, 5, datetime.now().strftime("%d/%m/%Y"))
+                            if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
+                            st.session_state.prod_dia[it].append("CIM"); st.rerun()
+                            
+                        st.divider()
+                        
+                        # POSTE
+                        c1, c2 = st.columns(2)
+                        ep, fp = ws.cell(r, 6).value, ws.cell(r, 8).value
+                        c1.metric("Poste", str(ep) if ep else "-")
+                        if fp: c2.success(f"Hecho: {fp}")
+                        elif c2.button("✅ Marcar POSTE"):
+                            guardar_produccion_celda(nom_arch, hj, r, 8, datetime.now().strftime("%d/%m/%Y"))
+                            if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
+                            st.session_state.prod_dia[it].append("POSTE"); st.rerun()
+                            
+                        st.divider()
+                        
+                        # MENSULA (AG=33, AL=38)
+                        c1, c2 = st.columns(2)
+                        m1, m2, m3 = ws.cell(r, 33).value, ws.cell(r, 34).value, ws.cell(r, 35).value
+                        desc_m = f"{m1 or ''} {m2 or ''} {m3 or ''}".strip()
+                        fm = ws.cell(r, 38).value
+                        c1.metric("Ménsula", desc_m if desc_m else "-")
+                        if fm: c2.success(f"Hecho: {fm}")
+                        elif c2.button("✅ Marcar MENSULA"):
+                            guardar_produccion_celda(nom_arch, hj, r, 38, datetime.now().strftime("%d/%m/%Y"))
+                            if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
+                            st.session_state.prod_dia[it].append("MENSULA"); st.rerun()
+                            
+                        st.divider()
+                        
+                        # ANCLAJES (Complejo: 4 tipos, 4 fechas)
+                        st.write("**Anclajes:**")
+                        # Tipos: R(18), U(21), X(24), AA(27)
+                        # Fechas: T(20), W(23), Z(26), AC(29)
+                        cols_tipos = [18, 21, 24, 27]
+                        cols_fechas = [20, 23, 26, 29]
+                        
+                        tipos_encontrados = []
+                        indices_activos = []
+                        ya_hecho = False
+                        
+                        for i in range(4):
+                            val = ws.cell(r, cols_tipos[i]).value
+                            fecha = ws.cell(r, cols_fechas[i]).value
+                            if val: 
+                                tipos_encontrados.append(str(val))
+                                indices_activos.append(i)
+                                if fecha: ya_hecho = True
+                        
+                        desc_anc = ", ".join(tipos_encontrados)
+                        c1, c2 = st.columns(2)
+                        c1.metric("Tipo", desc_anc if desc_anc else "Ninguno")
+                        
+                        if not desc_anc:
+                            c2.info("Sin anclajes definidos")
+                        elif ya_hecho:
+                            c2.success("✅ Ya registrados")
+                        else:
+                            if c2.button("✅ Marcar TODOS Anclajes"):
+                                hoy_str = datetime.now().strftime("%d/%m/%Y")
+                                for idx in indices_activos:
+                                    guardar_produccion_celda(nom_arch, hj, r, cols_fechas[idx], hoy_str)
+                                if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
+                                st.session_state.prod_dia[it].append("ANCLAJES"); st.rerun()
