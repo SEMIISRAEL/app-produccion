@@ -17,13 +17,13 @@ from email import encoders
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Gestor SEMI - Tablet", layout="wide", page_icon="🏗️")
 
-# --- IDs EXACTOS DE TUS ARCHIVOS ---
+# --- IDs EXACTOS ---
 ID_ROSTER = "1ezFvpyTzkL98DJjpXeeGuqbMy_kTZItUC9FDkxFlD08"
 ID_VEHICULOS = "19PWpeCz8pl5NEDpK-omX5AdrLuJgOPrn6uSjtUGomY8"
 ID_CONFIG_PROD = "1uCu5pq6l1CjqXKPEkGkN-G5Z5K00qiV9kR_bGOii6FU"
 
 # ==========================================
-#           CONEXIÓN (GOOGLE SHEETS)
+#           CONEXIÓN 
 # ==========================================
 @st.cache_resource
 def get_gspread_client():
@@ -44,12 +44,11 @@ def conectar_por_nombre(nombre_archivo):
     except: return None
 
 # ==========================================
-#      ENVÍO POR EMAIL (GMAIL)
+#      ENVÍO EMAIL
 # ==========================================
 def enviar_email_pdf(pdf_buffer, nombre_archivo, fecha_str, jefe):
     try:
         if "email" not in st.secrets: return False
-        
         user = st.secrets["email"]["usuario"]
         pwd = st.secrets["email"]["password"]
         dest = st.secrets["email"]["destinatario"]
@@ -58,7 +57,7 @@ def enviar_email_pdf(pdf_buffer, nombre_archivo, fecha_str, jefe):
         msg['From'] = user
         msg['To'] = dest
         msg['Subject'] = f"📄 Parte: {fecha_str} - {jefe}"
-
+        
         body = f"Adjunto parte de trabajo.\nFecha: {fecha_str}\nVehículo/Lugar: {jefe}"
         msg.attach(MIMEText(body, 'plain'))
 
@@ -78,7 +77,7 @@ def enviar_email_pdf(pdf_buffer, nombre_archivo, fecha_str, jefe):
     except: return False
 
 # ==========================================
-#      CARGA DE DATOS (CON CACHÉ)
+#      CARGA DE DATOS
 # ==========================================
 @st.cache_data(ttl=600)
 def cargar_vehiculos_dict():
@@ -179,105 +178,152 @@ def guardar_produccion(archivo_prod, hoja_prod, fila, col, valor):
     except: return False
 
 # ==========================================
-#          GENERADOR PDF (DISEÑO FINAL)
+#      GENERADOR PDF (DISEÑO EXACTO)
 # ==========================================
 def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
     buffer = BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
     _, height = A4
     
-    # --- LÓGICA HORAS GLOBALES (PRIMER TRABAJADOR) ---
+    # 1. HEADER LOGIC (Horas del primero)
     start_time = "________"
     end_time = "________"
-    
     if trabajadores:
-        # El primero de la lista manda
-        primero = trabajadores[0]
-        start_time = primero['H_Inicio']
-        end_time = primero['H_Fin']
+        start_time = trabajadores[0]['H_Inicio']
+        end_time = trabajadores[0]['H_Fin']
 
-    # --- CABECERA (DISEÑO CAJA) ---
+    # 2. CABECERA
+    y = height - 90
+    c.setLineWidth(1)
+    c.rect(40, y - 60, 515, 70) # Caja principal
+
     c.setFont("Helvetica-Bold", 16)
     c.drawString(50, height - 50, "Daily Work Log - SEMI ISRAEL")
     c.setFont("Helvetica", 10)
     c.drawString(400, height - 50, "Israel Railways Project")
     
-    # Recuadro Cabecera
-    y_header = height - 90
-    c.rect(40, y_header - 60, 515, 70) 
-    
     c.setFont("Helvetica-Bold", 10)
-    # Fila 1
-    c.drawString(50, y_header - 15, f"Date: {fecha_str}")
-    c.drawString(250, y_header - 15, f"Vehículo/Lugar: {jefe}") # CAMBIO SOLICITADO
+    c.drawString(50, y - 15, f"Date: {fecha_str}")
+    c.drawString(250, y - 15, f"Vehicle / Activity: {jefe}")
+    c.drawString(50, y - 45, f"Start Time: {start_time}")
+    c.drawString(200, y - 45, f"End Time: {end_time}")
+    c.drawString(350, y - 45, "Weather: ________")
+
+    # 3. TABLA (REDISEÑADA IDÉNTICA)
+    y_cursor = y - 80
     
-    # Fila 2 (Horas del primer trabajador)
-    c.drawString(50, y_header - 45, f"Start Time: {start_time}") # CAMBIO SOLICITADO
-    c.drawString(200, y_header - 45, f"End Time: {end_time}")   # CAMBIO SOLICITADO
-    c.drawString(350, y_header - 45, "Weather: ________")
-    
-    # --- TABLA TRABAJADORES ---
-    y = y_header - 80
-    
-    # Barra Azul Títulos
+    # Cabecera Azul
     c.setFillColor(colors.HexColor("#2980B9"))
-    c.rect(40, y, 515, 20, fill=1)
+    c.rect(40, y_cursor, 515, 20, fill=1)
     c.setFillColor(colors.white)
-    c.setFont("Helvetica-Bold", 9)
+    c.setFont("Helvetica-Bold", 8)
     
-    headers = ["ID", "Name", "In", "Out", "Hours", "Shift"]
-    x_coords = [50, 100, 300, 350, 400, 460]
+    # Columnas exactas
+    headers = ["Employee Name", "ID Number", "Company", "Profession", "Normal", "Extra", "Night"]
+    x_coords = [40, 180, 260, 330, 400, 450, 500, 555] # Posiciones verticales
     
-    c.drawString(x_coords[0], y+6, "ID")
-    c.drawString(x_coords[1], y+6, "Employee Name")
-    c.drawString(x_coords[2], y+6, "In")
-    c.drawString(x_coords[3], y+6, "Out")
-    c.drawString(x_coords[4], y+6, "Total")
-    c.drawString(x_coords[5], y+6, "Shift")
+    c.drawString(x_coords[0] + 5, y_cursor + 6, headers[0])
+    c.drawString(x_coords[1] + 5, y_cursor + 6, headers[1])
+    c.drawString(x_coords[2] + 5, y_cursor + 6, headers[2])
+    c.drawString(x_coords[3] + 5, y_cursor + 6, headers[3])
+    c.drawString(x_coords[4] + 5, y_cursor + 6, headers[4])
+    c.drawString(x_coords[5] + 5, y_cursor + 6, headers[5])
+    c.drawString(x_coords[6] + 5, y_cursor + 6, headers[6])
     
-    y -= 20
+    y_cursor -= 20
     c.setFillColor(colors.black)
     c.setFont("Helvetica", 9)
+    y_tabla_start = y - 80
     
+    # Rellenar filas
     for t in trabajadores:
-        c.drawString(x_coords[0], y+6, str(t['ID']))
-        c.drawString(x_coords[1], y+6, t['Nombre'][:35])
-        c.drawString(x_coords[2], y+6, t['H_Inicio'])
-        c.drawString(x_coords[3], y+6, t['H_Fin'])
-        c.drawString(x_coords[4], y+6, str(t['Total_Horas']))
-        c.drawString(x_coords[5], y+6, t['Turno_Letra'])
+        # Calcular horas normales vs extra
+        h_total = float(t['Total_Horas'])
+        h_base = 8.0 if h_total > 8 else h_total
+        h_extra = h_total - 8.0 if h_total > 8 else 0.0
         
-        c.setLineWidth(0.5)
-        c.line(40, y, 555, y) # Línea horizontal
-        y -= 20
+        # Nombre e ID
+        c.drawString(x_coords[0] + 5, y_cursor + 6, t['Nombre'][:25])
+        c.drawString(x_coords[1] + 5, y_cursor + 6, str(t['ID']))
+        c.drawString(x_coords[2] + 5, y_cursor + 6, "SEMI")
+        c.drawString(x_coords[3] + 5, y_cursor + 6, "Official")
         
-        if y < 100: c.showPage(); y = height - 50
+        # Lógica de columnas de horas (Night vs Normal)
+        if t['Es_Noche']:
+            # Si es noche, las base van a la columna "Night" (índice 6 -> x_coords[6])
+            c.drawString(x_coords[6] + 10, y_cursor + 6, f"{h_base:g}")
+        else:
+            # Si es día, las base van a la columna "Normal" (índice 4 -> x_coords[4])
+            c.drawString(x_coords[4] + 10, y_cursor + 6, f"{h_base:g}")
             
-    # --- PARALIZACIONES ---
+        # Extras siempre en columna Extra (índice 5)
+        if h_extra > 0:
+            c.drawString(x_coords[5] + 10, y_cursor + 6, f"{h_extra:g}")
+            
+        # Linea fila
+        c.setLineWidth(0.5)
+        c.line(40, y_cursor, 555, y_cursor)
+        y_cursor -= 20
+        
+        if y_cursor < 150: # Salto de página si llenamos
+            c.showPage()
+            y_cursor = height - 50
+            
+    # Completar líneas verticales hasta el final de los datos
+    y_final_tabla = y_cursor + 20
+    c.setLineWidth(1)
+    # Dibujamos las rayas verticales
+    for x in x_coords:
+        c.line(x, y_tabla_start + 20, x, y_final_tabla - 20) # Desde cabecera hasta fin
+    c.line(555, y_tabla_start + 20, 555, y_final_tabla - 20) # Cierre derecho
+
+    # 4. PARALIZACIONES
+    y_cursor -= 10
     if datos_para:
-        y -= 30
         c.setStrokeColor(colors.red)
-        c.rect(40, y - 40, 515, 50)
+        c.setLineWidth(2)
+        c.rect(40, y_cursor - 50, 515, 50)
         c.setFillColor(colors.red)
         c.setFont("Helvetica-Bold", 10)
-        c.drawString(50, y - 15, "⚠️ PARALIZACIÓN / CLIENT DELAY")
+        c.drawString(50, y_cursor - 15, "⚠️ CLIENT DELAY / PARALIZACIÓN")
         c.setFillColor(colors.black)
         c.setFont("Helvetica", 10)
-        c.drawString(50, y - 35, f"Time: {datos_para['inicio']} - {datos_para['fin']} ({datos_para['duracion']}h) | Reason: {datos_para['motivo']}")
+        c.drawString(50, y_cursor - 35, f"Time: {datos_para['inicio']} - {datos_para['fin']} ({datos_para['duracion']}h) | Reason: {datos_para['motivo']}")
+        y_cursor -= 70
         c.setStrokeColor(colors.black)
-        y -= 60
-        
-    # --- PRODUCCIÓN ---
-    if prod_dia:
-        y -= 20
+        c.setLineWidth(1)
+
+    # 5. FOOTER (Producción + Firma)
+    y_footer_top = 130
+    altura_activities = y_cursor - y_footer_top
+    
+    if altura_activities > 20:
+        c.rect(40, y_footer_top, 515, altura_activities)
         c.setFont("Helvetica-Bold", 10)
-        c.drawString(50, y, "Production / Works Done:")
-        y -= 20
-        c.setFont("Helvetica", 9)
-        for k, v in prod_dia.items():
-            c.drawString(60, y, f"• {k}: {', '.join(v)}")
-            y -= 15
+        c.drawString(50, y_cursor - 15, "Work Description / Location:")
+        c.setLineWidth(0.5)
+        
+        y_line = y_cursor - 35
+        if prod_dia:
+            c.setFont("Helvetica", 9)
+            for k, v in prod_dia.items():
+                c.drawString(50, y_line + 5, f"- {k}: {', '.join(v)}")
+                c.line(40, y_line, 555, y_line)
+                y_line -= 20
+        
+        # Rellenar con líneas vacías hasta abajo
+        while y_line > y_footer_top + 5:
+            c.line(40, y_line, 555, y_line)
+            y_line -= 20
             
+    # Caja Final Firma
+    c.setLineWidth(1)
+    c.rect(40, 30, 515, 90)
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(50, 100, "Machinery / Materials:")
+    c.line(40, 70, 555, 70)
+    c.drawString(50, 50, "SIGNATURE (ENCARGADO): __________________________")
+
     c.save()
     buffer.seek(0)
     return buffer
@@ -380,17 +426,21 @@ with tab1:
         if not st.session_state.lista_sel: st.error("Lista vacía.")
         elif not vehiculo_sel: st.error("Falta seleccionar vehículo.")
         else:
-            with st.spinner("Guardando en la Nube y Enviando Email..."):
+            with st.spinner("Guardando..."):
                 ok_datos = guardar_parte_en_nube(fecha_sel, st.session_state.lista_sel, vehiculo_sel, d_para)
                 pdf_bytes = generar_pdf_bytes(str(fecha_sel.date()), vehiculo_sel, st.session_state.lista_sel, d_para, st.session_state.prod_dia)
                 nombre_pdf = f"Parte_{fecha_sel.strftime('%Y-%m-%d')}_{vehiculo_sel}.pdf"
                 
-                enviado = enviar_email_pdf(pdf_bytes, nombre_pdf, str(fecha_sel.date()), vehiculo_sel)
-                msg_email = "📧 Email enviado." if enviado else "⚠️ Fallo al enviar email (Revisa contraseña)."
+                try:
+                    if "email" in st.secrets:
+                        enviado = enviar_email_pdf(pdf_bytes, nombre_pdf, str(fecha_sel.date()), vehiculo_sel)
+                        msg = "📧 Email enviado." if enviado else "⚠️ Fallo al enviar email."
+                    else: msg = "⚠️ Configura Email en Secrets."
+                except: msg = "⚠️ Error Email."
 
                 if ok_datos:
-                    st.success(f"✅ ¡Datos guardados! {msg_email}")
-                    st.download_button("📥 Descargar Copia en Tablet", pdf_bytes, nombre_pdf, "application/pdf")
+                    st.success(f"✅ ¡Guardado! {msg}")
+                    st.download_button("📥 Descargar Copia", pdf_bytes, nombre_pdf, "application/pdf")
                     st.session_state.lista_sel = []; st.session_state.prod_dia = {}; time.sleep(5); st.rerun()
 
 # ---------------- PESTAÑA 2 ----------------
@@ -435,4 +485,3 @@ with tab2:
                             if item_sel not in st.session_state.prod_dia: st.session_state.prod_dia[item_sel] = []
                             st.session_state.prod_dia[item_sel].append("POSTE")
                             st.rerun()
-
