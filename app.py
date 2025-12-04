@@ -17,13 +17,13 @@ from email import encoders
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Gestor SEMI - Tablet", layout="wide", page_icon="🏗️")
 
-# --- IDs EXACTOS DE TUS ARCHIVOS EXCEL ---
+# --- IDs EXACTOS DE TUS ARCHIVOS ---
 ID_ROSTER = "1ezFvpyTzkL98DJjpXeeGuqbMy_kTZItUC9FDkxFlD08"
 ID_VEHICULOS = "19PWpeCz8pl5NEDpK-omX5AdrLuJgOPrn6uSjtUGomY8"
 ID_CONFIG_PROD = "1uCu5pq6l1CjqXKPEkGkN-G5Z5K00qiV9kR_bGOii6FU"
 
 # ==========================================
-#           CONEXIÓN SHEETS
+#           CONEXIÓN (GOOGLE SHEETS)
 # ==========================================
 @st.cache_resource
 def get_gspread_client():
@@ -44,11 +44,12 @@ def conectar_por_nombre(nombre_archivo):
     except: return None
 
 # ==========================================
-#      FUNCIÓN DE ENVÍO DE EMAIL
+#      ENVÍO POR EMAIL (GMAIL)
 # ==========================================
 def enviar_email_pdf(pdf_buffer, nombre_archivo, fecha_str, jefe):
     try:
-        # Cargamos datos desde Secrets
+        if "email" not in st.secrets: return False
+        
         user = st.secrets["email"]["usuario"]
         pwd = st.secrets["email"]["password"]
         dest = st.secrets["email"]["destinatario"]
@@ -58,17 +59,15 @@ def enviar_email_pdf(pdf_buffer, nombre_archivo, fecha_str, jefe):
         msg['To'] = dest
         msg['Subject'] = f"📄 Parte: {fecha_str} - {jefe}"
 
-        body = f"Adjunto el parte de trabajo del día {fecha_str}.\nVehículo/Lugar: {jefe}"
+        body = f"Adjunto parte de trabajo.\nFecha: {fecha_str}\nVehículo/Lugar: {jefe}"
         msg.attach(MIMEText(body, 'plain'))
 
-        # Adjuntar PDF
         part = MIMEBase('application', 'octet-stream')
         part.set_payload(pdf_buffer.getvalue())
         encoders.encode_base64(part)
         part.add_header('Content-Disposition', f"attachment; filename= {nombre_archivo}")
         msg.attach(part)
 
-        # Conexión Segura con Gmail
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(user, pwd)
@@ -76,10 +75,7 @@ def enviar_email_pdf(pdf_buffer, nombre_archivo, fecha_str, jefe):
         server.sendmail(user, dest, text)
         server.quit()
         return True
-
-    except Exception as e:
-        print(f"Error Email: {e}")
-        return False
+    except: return False
 
 # ==========================================
 #      CARGA DE DATOS (CON CACHÉ)
@@ -145,7 +141,7 @@ def buscar_columna_dia(ws, dia_num):
     return 14 + (dias_dif * 2)
 
 # ==========================================
-#          GUARDADO DE DATOS
+#          GUARDADO EXCEL
 # ==========================================
 def guardar_parte_en_nube(fecha_dt, lista_trabajadores, vehiculo, datos_paralizacion):
     sh = conectar_por_id(ID_ROSTER)
@@ -171,9 +167,7 @@ def guardar_parte_en_nube(fecha_dt, lista_trabajadores, vehiculo, datos_paraliza
                 ws_para.append_row(["Fecha", "Vehiculo/Lugar", "Inicio", "Fin", "Horas", "Motivo"])
             ws_para.append_row([str(fecha_dt.date()), vehiculo, datos_paralizacion['inicio'], datos_paralizacion['fin'], datos_paralizacion['duracion'], datos_paralizacion['motivo']])
         return True
-    except Exception as e:
-        st.error(f"Error al guardar: {e}")
-        return False
+    except: return False
 
 def guardar_produccion(archivo_prod, hoja_prod, fila, col, valor):
     sh = conectar_por_nombre(archivo_prod)
@@ -182,48 +176,108 @@ def guardar_produccion(archivo_prod, hoja_prod, fila, col, valor):
         ws = sh.worksheet(hoja_prod)
         ws.update_cell(fila, col, valor)
         return True
-    except Exception as e:
-        st.error(f"Error: {e}")
-        return False
+    except: return False
 
 # ==========================================
-#          PDF GENERATOR
+#          GENERADOR PDF (DISEÑO FINAL)
 # ==========================================
 def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
     buffer = BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
     _, height = A4
+    
+    # --- LÓGICA HORAS GLOBALES (PRIMER TRABAJADOR) ---
+    start_time = "________"
+    end_time = "________"
+    
+    if trabajadores:
+        # El primero de la lista manda
+        primero = trabajadores[0]
+        start_time = primero['H_Inicio']
+        end_time = primero['H_Fin']
+
+    # --- CABECERA (DISEÑO CAJA) ---
     c.setFont("Helvetica-Bold", 16)
     c.drawString(50, height - 50, "Daily Work Log - SEMI ISRAEL")
     c.setFont("Helvetica", 10)
-    c.drawString(50, height - 80, f"Date: {fecha_str} | Vehicle/Location: {jefe}")
-    y = height - 120
+    c.drawString(400, height - 50, "Israel Railways Project")
+    
+    # Recuadro Cabecera
+    y_header = height - 90
+    c.rect(40, y_header - 60, 515, 70) 
+    
+    c.setFont("Helvetica-Bold", 10)
+    # Fila 1
+    c.drawString(50, y_header - 15, f"Date: {fecha_str}")
+    c.drawString(250, y_header - 15, f"Vehículo/Lugar: {jefe}") # CAMBIO SOLICITADO
+    
+    # Fila 2 (Horas del primer trabajador)
+    c.drawString(50, y_header - 45, f"Start Time: {start_time}") # CAMBIO SOLICITADO
+    c.drawString(200, y_header - 45, f"End Time: {end_time}")   # CAMBIO SOLICITADO
+    c.drawString(350, y_header - 45, "Weather: ________")
+    
+    # --- TABLA TRABAJADORES ---
+    y = y_header - 80
+    
+    # Barra Azul Títulos
+    c.setFillColor(colors.HexColor("#2980B9"))
+    c.rect(40, y, 515, 20, fill=1)
+    c.setFillColor(colors.white)
     c.setFont("Helvetica-Bold", 9)
-    c.drawString(50, y, "ID - Name")
-    c.drawString(300, y, "Time")
-    c.drawString(400, y, "Total")
-    c.drawString(450, y, "Shift")
-    y -= 15
+    
+    headers = ["ID", "Name", "In", "Out", "Hours", "Shift"]
+    x_coords = [50, 100, 300, 350, 400, 460]
+    
+    c.drawString(x_coords[0], y+6, "ID")
+    c.drawString(x_coords[1], y+6, "Employee Name")
+    c.drawString(x_coords[2], y+6, "In")
+    c.drawString(x_coords[3], y+6, "Out")
+    c.drawString(x_coords[4], y+6, "Total")
+    c.drawString(x_coords[5], y+6, "Shift")
+    
+    y -= 20
+    c.setFillColor(colors.black)
     c.setFont("Helvetica", 9)
+    
     for t in trabajadores:
-        c.drawString(50, y, f"{t['ID']} - {t['Nombre']}"[:45])
-        c.drawString(300, y, f"{t['H_Inicio']} - {t['H_Fin']}")
-        c.drawString(400, y, str(t['Total_Horas']))
-        c.drawString(450, y, t['Turno_Letra'])
-        y -= 15
-        if y < 100: c.showPage(); y = height - 50
-    if datos_para:
+        c.drawString(x_coords[0], y+6, str(t['ID']))
+        c.drawString(x_coords[1], y+6, t['Nombre'][:35])
+        c.drawString(x_coords[2], y+6, t['H_Inicio'])
+        c.drawString(x_coords[3], y+6, t['H_Fin'])
+        c.drawString(x_coords[4], y+6, str(t['Total_Horas']))
+        c.drawString(x_coords[5], y+6, t['Turno_Letra'])
+        
+        c.setLineWidth(0.5)
+        c.line(40, y, 555, y) # Línea horizontal
         y -= 20
+        
+        if y < 100: c.showPage(); y = height - 50
+            
+    # --- PARALIZACIONES ---
+    if datos_para:
+        y -= 30
+        c.setStrokeColor(colors.red)
+        c.rect(40, y - 40, 515, 50)
         c.setFillColor(colors.red)
-        c.drawString(50, y, f"⚠️ DELAY: {datos_para['motivo']} ({datos_para['duracion']}h)")
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(50, y - 15, "⚠️ PARALIZACIÓN / CLIENT DELAY")
         c.setFillColor(colors.black)
-        y -= 40
+        c.setFont("Helvetica", 10)
+        c.drawString(50, y - 35, f"Time: {datos_para['inicio']} - {datos_para['fin']} ({datos_para['duracion']}h) | Reason: {datos_para['motivo']}")
+        c.setStrokeColor(colors.black)
+        y -= 60
+        
+    # --- PRODUCCIÓN ---
     if prod_dia:
-        c.drawString(50, y - 20, "Production:")
-        y -= 35
+        y -= 20
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(50, y, "Production / Works Done:")
+        y -= 20
+        c.setFont("Helvetica", 9)
         for k, v in prod_dia.items():
-            c.drawString(60, y, f"- {k}: {', '.join(v)}")
+            c.drawString(60, y, f"• {k}: {', '.join(v)}")
             y -= 15
+            
     c.save()
     buffer.seek(0)
     return buffer
@@ -327,25 +381,15 @@ with tab1:
         elif not vehiculo_sel: st.error("Falta seleccionar vehículo.")
         else:
             with st.spinner("Guardando en la Nube y Enviando Email..."):
-                # 1. Guardar en Excel
                 ok_datos = guardar_parte_en_nube(fecha_sel, st.session_state.lista_sel, vehiculo_sel, d_para)
-                
-                # 2. Generar PDF
                 pdf_bytes = generar_pdf_bytes(str(fecha_sel.date()), vehiculo_sel, st.session_state.lista_sel, d_para, st.session_state.prod_dia)
                 nombre_pdf = f"Parte_{fecha_sel.strftime('%Y-%m-%d')}_{vehiculo_sel}.pdf"
                 
-                # 3. Enviar Email
-                try:
-                    if "email" in st.secrets:
-                        enviado = enviar_email_pdf(pdf_bytes, nombre_pdf, str(fecha_sel.date()), vehiculo_sel)
-                        msg_email = "📧 Email enviado." if enviado else "⚠️ Fallo al enviar email."
-                    else:
-                        msg_email = "⚠️ Faltan datos de Email en Secrets."
-                except:
-                    msg_email = "⚠️ Error configuración email."
+                enviado = enviar_email_pdf(pdf_bytes, nombre_pdf, str(fecha_sel.date()), vehiculo_sel)
+                msg_email = "📧 Email enviado." if enviado else "⚠️ Fallo al enviar email (Revisa contraseña)."
 
                 if ok_datos:
-                    st.success(f"✅ ¡Datos guardados en Excel! {msg_email}")
+                    st.success(f"✅ ¡Datos guardados! {msg_email}")
                     st.download_button("📥 Descargar Copia en Tablet", pdf_bytes, nombre_pdf, "application/pdf")
                     st.session_state.lista_sel = []; st.session_state.prod_dia = {}; time.sleep(5); st.rerun()
 
@@ -390,6 +434,5 @@ with tab2:
                             guardar_produccion(archivo_prod, hoja_sel, fila, 8, datetime.now().strftime("%d/%m/%Y"))
                             if item_sel not in st.session_state.prod_dia: st.session_state.prod_dia[item_sel] = []
                             st.session_state.prod_dia[item_sel].append("POSTE")
-                            st.rerun()
                             st.rerun()
 
