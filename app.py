@@ -18,49 +18,20 @@ from email.mime.text import MIMEText
 from email import encoders
 
 # --- CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(page_title="Gestor SEMI - Tablet", layout="wide", page_icon="🔒")
+st.set_page_config(page_title="Gestor SEMI - Tablet", layout="wide", page_icon="🏗️")
 
 # --- IDs FIJOS ---
 ID_VEHICULOS = "19PWpeCz8pl5NEDpK-omX5AdrLuJgOPrn6uSjtUGomY8"
 ID_CONFIG_PROD = "1uCu5pq6l1CjqXKPEkGkN-G5Z5K00qiV9kR_bGOii6FU"
 
 # ==========================================
-#           SISTEMA DE LOGIN
+#      BYPASS DE SEGURIDAD (MODO DEV)
 # ==========================================
-def check_login():
-    if 'logged_in' not in st.session_state:
-        st.session_state.logged_in = False
-        st.session_state.user_role = None
-        st.session_state.user_name = None
-
-    if not st.session_state.logged_in:
-        st.markdown("<h1 style='text-align: center;'>🔐 Acceso Restringido</h1>", unsafe_allow_html=True)
-        c1, c2, c3 = st.columns([1, 2, 1])
-        with c2:
-            st.info("Inicia sesión para continuar")
-            usuario = st.text_input("Usuario")
-            password = st.text_input("Contraseña", type="password")
-            
-            if st.button("Entrar", type="primary", use_container_width=True):
-                try:
-                    users_db = st.secrets["usuarios"]
-                    roles_db = st.secrets["roles"]
-                    
-                    if usuario in users_db and users_db[usuario] == password:
-                        st.session_state.logged_in = True
-                        st.session_state.user_name = usuario
-                        st.session_state.user_role = roles_db.get(usuario, "invitado")
-                        st.success("¡Bienvenido!")
-                        st.rerun()
-                    else:
-                        st.error("❌ Usuario o contraseña incorrectos")
-                except:
-                    st.error("⚠️ Error: No se han configurado usuarios en Secrets.")
-        return False
-    return True
-
-if not check_login():
-    st.stop()
+# En lugar de pedir contraseña, asignamos ADMIN directamente
+if 'logged_in' not in st.session_state:
+    st.session_state.logged_in = True
+    st.session_state.user_name = "Oscar (Admin)"
+    st.session_state.user_role = "admin" # 'admin' para ver todo, 'encargado' para restringir
 
 # ==========================================
 #      CONFIGURACIÓN Y SIDEBAR
@@ -83,11 +54,8 @@ def buscar_archivos_roster():
 
 # --- BARRA LATERAL ---
 with st.sidebar:
-    st.write(f"👤 **{st.session_state.user_name.upper()}** ({st.session_state.user_role.upper()})")
-    
-    if st.button("Cerrar Sesión"):
-        st.session_state.logged_in = False
-        st.rerun()
+    st.write(f"👤 **{st.session_state.user_name}**")
+    st.caption("🔓 Modo Desarrollo (Sin contraseña)")
     
     st.markdown("---")
     
@@ -97,19 +65,15 @@ with st.sidebar:
     nombre_roster_sel = "Desconocido"
 
     if archivos_roster:
-        # --- LÓGICA DE SEGURIDAD ---
+        # --- LÓGICA DE SEGURIDAD (SIMULADA) ---
         if st.session_state.user_role == "admin":
-            # EL ADMIN: Ve el menú y elige
-            st.header("🗂️ Configuración (Solo Admin)")
+            st.header("🗂️ Configuración Mes")
             nombre_roster_sel = st.selectbox("Archivo de Horas:", list(archivos_roster.keys()))
             ID_ROSTER_ACTIVO = archivos_roster[nombre_roster_sel]
             st.success(f"Editando: {nombre_roster_sel}")
         else:
-            # EL ENCARGADO: No ve menú. Se selecciona AUTOMÁTICAMENTE el primero (el más nuevo)
             nombre_roster_sel = list(archivos_roster.keys())[0]
             ID_ROSTER_ACTIVO = archivos_roster[nombre_roster_sel]
-            # Opcional: Mostrar qué archivo se está usando (solo lectura)
-            # st.info(f"📂 Archivo actual: {nombre_roster_sel}") 
     else:
         st.error("No se encontraron archivos Roster.")
 
@@ -149,7 +113,7 @@ def enviar_email_pdf(pdf_buffer, nombre_archivo, fecha_str, jefe):
         msg['To'] = dest
         msg['Subject'] = f"📄 Parte: {fecha_str} - {jefe}"
         
-        body = f"Adjunto parte de trabajo.\nFecha: {fecha_str}\nVehículo/Lugar: {jefe}\nUsuario App: {st.session_state.user_name}"
+        body = f"Adjunto el parte de trabajo diario.\nFecha: {fecha_str}\nVehículo/Lugar: {jefe}\nUsuario App: {st.session_state.user_name}"
         msg.attach(MIMEText(body, 'plain'))
 
         part = MIMEBase('application', 'octet-stream')
@@ -187,7 +151,7 @@ def cargar_vehiculos_dict():
         return diccionario
     except: return {}
 
-# CARGA TRABAJADORES (Depende del ID_ROSTER_ACTIVO)
+# FUNCIÓN INTELIGENTE: FILTRA LOS QUE YA HAN FICHADO
 def cargar_trabajadores_disponibles(fecha_dt, id_roster):
     if not id_roster: return []
     sh = conectar_por_id(id_roster)
@@ -199,18 +163,21 @@ def cargar_trabajadores_disponibles(fecha_dt, id_roster):
         col_dia = buscar_columna_dia(ws, fecha_dt.day)
         datos = ws.get_all_values()
         lista_trabajadores = []
+        
         idx_dia = col_dia - 1
         
-        for fila in datos[8:]:
+        for fila in datos[8:]: # Empezamos en fila 9
             if len(fila) < 2: continue
+            
             uid = str(fila[0]).strip()
             nombre = str(fila[1]).strip()
             
-            # FILTRO: ¿YA FICHÓ?
+            # FILTRO: ¿YA TIENE HORAS?
             registrado = False
             if len(fila) > idx_dia:
                 val = str(fila[idx_dia]).strip()
-                if val and val not in ["", "None"]: registrado = True
+                if val and val not in ["", "None"]:
+                    registrado = True
             
             if registrado: continue 
             
@@ -220,7 +187,9 @@ def cargar_trabajadores_disponibles(fecha_dt, id_roster):
                 if marca == "A" or "ALMACEN" in marca: tipo = "ALMACEN"
             
             if uid and nombre and uid.lower() != "id":
-                lista_trabajadores.append({"display": f"{uid} - {nombre}", "tipo": tipo, "id": uid, "nombre_solo": nombre})
+                lista_trabajadores.append({
+                    "display": f"{uid} - {nombre}", "tipo": tipo, "id": uid, "nombre_solo": nombre
+                })
         return lista_trabajadores
     except: return []
 
@@ -289,20 +258,24 @@ def guardar_produccion(archivo_prod, hoja_prod, fila, col, valor):
 def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
     buffer = BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
-    _, height = A4
+    width, height = A4
+    
     start_time = "________"
     end_time = "________"
     if trabajadores:
         start_time = trabajadores[0]['H_Inicio']
         end_time = trabajadores[0]['H_Fin']
 
+    # --- CABECERA ---
     y = height - 90
     c.setLineWidth(1)
     c.rect(40, y - 60, 515, 70) 
+
     c.setFont("Helvetica-Bold", 16)
     c.drawString(50, height - 50, "Daily Work Log - SEMI ISRAEL")
     c.setFont("Helvetica", 10)
     c.drawString(400, height - 50, "Israel Railways Project")
+    
     c.setFont("Helvetica-Bold", 10)
     c.drawString(50, y - 15, f"Date: {fecha_str}")
     c.drawString(250, y - 15, f"Vehicle / Activity: {jefe}")
@@ -310,38 +283,42 @@ def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
     c.drawString(200, y - 45, f"End Time: {end_time}")
     c.drawString(350, y - 45, "Weather: ________")
 
-    y_cursor = y - 80
+    # --- TABLA ---
+    y_tabla_start = y - 80
+    y_cursor = y_tabla_start
+    x_coords = [40, 180, 260, 330, 400, 450, 500, 555]
+    headers = ["Employee Name", "ID Number", "Company", "Profession", "Normal", "Extra", "Night"]
+    
     c.setFillColor(colors.HexColor("#2980B9"))
-    c.rect(40, y_cursor, 515, 20, fill=1) 
+    c.rect(40, y_cursor, 515, 20, fill=1)
     c.setFillColor(colors.white)
     c.setFont("Helvetica-Bold", 8)
-    
-    headers = ["Employee Name", "ID Number", "Company", "Profession", "Normal", "Extra", "Night"]
-    x_coords = [40, 180, 260, 330, 400, 450, 500, 555]
     for i, h in enumerate(headers): c.drawString(x_coords[i] + 5, y_cursor + 6, h)
     
     y_cursor -= 20
     c.setFillColor(colors.black)
     c.setFont("Helvetica", 9)
-    y_tabla_start = y - 80
     
     for t in trabajadores:
         h_total = float(t['Total_Horas'])
         h_base = 8.0 if h_total > 8 else h_total
         h_extra = h_total - 8.0 if h_total > 8 else 0.0
+        col_base_idx = 6 if t['Es_Noche'] else 4
         
         c.drawString(x_coords[0] + 5, y_cursor + 6, t['Nombre'][:25])
         c.drawString(x_coords[1] + 5, y_cursor + 6, str(t['ID']))
         c.drawString(x_coords[2] + 5, y_cursor + 6, "SEMI")
         c.drawString(x_coords[3] + 5, y_cursor + 6, "Official")
-        col_idx = 6 if t['Es_Noche'] else 4
-        c.drawString(x_coords[col_idx] + 10, y_cursor + 6, f"{h_base:g}")
+        c.drawString(x_coords[col_base_idx] + 10, y_cursor + 6, f"{h_base:g}")
         if h_extra > 0: c.drawString(x_coords[5] + 10, y_cursor + 6, f"{h_extra:g}")
             
         c.setLineWidth(0.5)
         c.line(40, y_cursor, 555, y_cursor)
         y_cursor -= 20
-        if y_cursor < 200: c.showPage(); y_cursor = height - 50
+        
+        if y_cursor < 200:
+            c.showPage()
+            y_cursor = height - 50
     
     y_minimo = height - 400
     while y_cursor > y_minimo:
@@ -354,6 +331,7 @@ def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
     for x in x_coords: c.line(x, y_tabla_start + 20, x, y_final_tabla - 20)
     c.line(555, y_tabla_start + 20, 555, y_final_tabla - 20) 
 
+    # --- PARALIZACIONES ---
     y_bloque = y_final_tabla - 40
     if datos_para:
         c.setStrokeColor(colors.red)
@@ -369,6 +347,7 @@ def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
         c.setLineWidth(1)
         y_bloque -= 70
 
+    # --- FOOTER ---
     y_footer_top = 130
     y_activities_top = y_bloque
     altura_act = y_activities_top - y_footer_top
@@ -437,7 +416,6 @@ with tab1:
         c_add1, c_add2, c_add3, c_add4, c_add5 = st.columns([3, 1, 1, 1, 1])
         
         with st.spinner("Actualizando personal disponible..."):
-            # USAMOS EL ID DEL ROSTER ELEGIDO (ADMIN) O EL AUTOMÁTICO
             todos_trabajadores = cargar_trabajadores_disponibles(fecha_sel, ID_ROSTER_ACTIVO)
         
         if filtro == "ALMACEN":
@@ -503,6 +481,7 @@ with tab1:
             elif not vehiculo_sel: st.error("Falta seleccionar vehículo.")
             else:
                 with st.spinner("Guardando en la Nube y Enviando Email..."):
+                    # PASAMOS EL ID DEL ROSTER ELEGIDO
                     ok_datos = guardar_parte_en_nube(fecha_sel, st.session_state.lista_sel, vehiculo_sel, d_para, ID_ROSTER_ACTIVO)
                     
                     pdf_bytes = generar_pdf_bytes(str(fecha_sel.date()), vehiculo_sel, st.session_state.lista_sel, d_para, st.session_state.prod_dia)
