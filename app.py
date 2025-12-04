@@ -21,6 +21,7 @@ from email import encoders
 st.set_page_config(page_title="Gestor SEMI - Tablet", layout="wide", page_icon="🏗️")
 
 # --- IDs FIJOS ---
+ID_ROSTER = "1ezFvpyTzkL98DJjpXeeGuqbMy_kTZItUC9FDkxFlD08"
 ID_VEHICULOS = "19PWpeCz8pl5NEDpK-omX5AdrLuJgOPrn6uSjtUGomY8"
 ID_CONFIG_PROD = "1uCu5pq6l1CjqXKPEkGkN-G5Z5K00qiV9kR_bGOii6FU"
 
@@ -107,12 +108,13 @@ def conectar_por_id(file_id):
     try: return client.open_by_key(file_id)
     except: return None
 
-# Función robusta para conectar por nombre (intenta con/sin extensión)
-def conectar_por_nombre(nombre_archivo):
+# ESTA FUNCIÓN NO TIENE CACHÉ PARA PODER REINTENTAR SIEMPRE
+def conectar_por_nombre_raw(nombre_archivo):
     client = get_gspread_client()
     try:
         return client.open(nombre_archivo)
     except:
+        # Intento inteligente: si falla, prueba añadiendo o quitando .xlsx
         try:
             if ".xlsx" in nombre_archivo:
                 return client.open(nombre_archivo.replace(".xlsx", "").strip())
@@ -121,20 +123,13 @@ def conectar_por_nombre(nombre_archivo):
         except:
             return None
 
-# ==========================================
-#      NUEVO: LECTURA CACHEADA DE HOJAS
-# ==========================================
-# Esta función es la CLAVE para arreglar tu error 429.
-# Lee las hojas UNA vez y se acuerda por 10 minutos.
-@st.cache_data(ttl=600)
-def obtener_hojas_track(nombre_archivo):
-    sh = conectar_por_nombre(nombre_archivo)
-    if not sh: return []
+# ESTA SÍ TIENE CACHÉ PARA LA LISTA DE HOJAS (SOLUCIÓN AL ERROR 429)
+@st.cache_data(ttl=600, show_spinner=False)
+def obtener_hojas_track_cached(nombre_archivo):
+    sh = conectar_por_nombre_raw(nombre_archivo)
+    if not sh: return None
     try:
-        # Obtenemos títulos de todas las hojas
-        todas = [ws.title for ws in sh.worksheets()]
-        # Filtramos solo las HR TRACK
-        return [h for h in todas if "HR TRACK" in h.upper()]
+        return [ws.title for ws in sh.worksheets() if "HR TRACK" in ws.title.upper()]
     except: return []
 
 # ==========================================
@@ -231,7 +226,7 @@ def buscar_columna_dia(ws, dia_num):
     return 14 + (dias_dif * 2)
 
 # ==========================================
-#          GUARDADO Y ACTUALIZACIONES
+#          GUARDADO EXCEL
 # ==========================================
 def guardar_parte_en_nube(fecha_dt, lista_trabajadores, vehiculo, datos_paralizacion, id_roster):
     sh = conectar_por_id(id_roster)
@@ -258,8 +253,8 @@ def guardar_parte_en_nube(fecha_dt, lista_trabajadores, vehiculo, datos_paraliza
         return True
     except: return False
 
-def guardar_produccion_celda(archivo_prod, hoja_prod, fila, col, valor):
-    sh = conectar_por_nombre(archivo_prod)
+def guardar_produccion(archivo_prod, hoja_prod, fila, col, valor):
+    sh = conectar_por_nombre_raw(archivo_prod)
     if not sh: return False
     try:
         ws = sh.worksheet(hoja_prod)
@@ -268,14 +263,16 @@ def guardar_produccion_celda(archivo_prod, hoja_prod, fila, col, valor):
     except: return False
 
 # ==========================================
-#          PDF GENERATOR
+#      GENERADOR PDF (DISEÑO PROFESIONAL)
 # ==========================================
 def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
     buffer = BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
     _, height = A4
     start_time, end_time = "________", "________"
-    if trabajadores: start_time, end_time = trabajadores[0]['H_Inicio'], trabajadores[0]['H_Fin']
+    if trabajadores:
+        start_time = trabajadores[0]['H_Inicio']
+        end_time = trabajadores[0]['H_Fin']
 
     y = height - 90
     c.setLineWidth(1); c.rect(40, y - 60, 515, 70) 
@@ -338,13 +335,14 @@ def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
     c.save(); buffer.seek(0); return buffer
 
 # ==========================================
-#           INTERFAZ
+#           INTERFAZ DE USUARIO
 # ==========================================
 if 'lista_sel' not in st.session_state: st.session_state.lista_sel = []
 if 'prod_dia' not in st.session_state: st.session_state.prod_dia = {}
 
 tab1, tab2 = st.tabs(["📝 Partes de Trabajo", "🏗️ Producción"])
 
+# ---------------- PESTAÑA 1 ----------------
 with tab1:
     if not ID_ROSTER_ACTIVO: st.warning("⚠️ No hay archivo Roster.")
     else:
@@ -355,13 +353,18 @@ with tab1:
         mes = c2.selectbox("Mes", range(1,13), index=hoy.month-1)
         ano = c3.selectbox("Año", [2024, 2025, 2026], index=1)
         try: fecha_sel = datetime(ano, mes, dia)
-        except: fecha_sel = hoy
-        
-        dv = cargar_vehiculos_dict()
-        nv = [""] + list(dv.keys()) if dv else ["Error"]
-        veh_sel = c4.selectbox("Vehículo/Lugar", nv)
-        c5.text_input("Detalle", value=dv.get(veh_sel, "") if dv else "", disabled=True)
-        
+        except: fecha_sel = hoy; st.error("Fecha incorrecta")
+
+        dicc_vehiculos = cargar_vehiculos_dict()
+        if dicc_vehiculos:
+            nombres_veh = [""] + list(dicc_vehiculos.keys())
+            vehiculo_sel = c4.selectbox("Vehículo / Lugar", nombres_veh)
+            info_extra = dicc_vehiculos.get(vehiculo_sel, "")
+            c5.text_input("Detalle", value=info_extra, disabled=True)
+        else:
+            vehiculo_sel = c4.selectbox("Vehículo / Lugar", ["Error Carga"])
+            c5.text_input("Detalle", disabled=True)
+            
         st.divider()
         filtro = st.radio("Filtro:", ["TODOS", "OBRA", "ALMACEN"], horizontal=True)
         c_a1, c_a2, c_a3, c_a4, c_a5 = st.columns([3,1,1,1,1])
@@ -376,7 +379,7 @@ with tab1:
         else: 
             fil = all_trab; def_com=False
             
-        opc = [""] + [t['display'] for t in fil] if fil else ["Sin personal"]
+        opc = [""] + [t['display'] for t in fil] if fil else ["Sin personal disponible"]
         trab_sel = c_a1.selectbox("Operario", opc)
         
         h_ini = c_a2.time_input("Inicio", datetime.strptime("07:00", "%H:%M").time())
@@ -385,7 +388,7 @@ with tab1:
         comida = c_a5.checkbox("-1h Comida", value=def_com)
         
         if st.button("➕ AÑADIR", type="secondary", use_container_width=True):
-            if trab_sel and trab_sel not in ["", "Sin personal"]:
+            if trab_sel and trab_sel not in ["", "Sin personal disponible"]:
                 t1 = datetime.combine(fecha_sel, h_ini); t2 = datetime.combine(fecha_sel, h_fin)
                 if t2 < t1: t2 += timedelta(days=1)
                 ht = (t2-t1).seconds/3600
@@ -435,21 +438,25 @@ with tab1:
 with tab2:
     st.header("🏗️ Control de Producción")
     conf = cargar_config_prod()
-    if not conf: st.warning("No config")
+    if not conf: st.warning("⚠️ No se pudo leer 'ARCHIVOS DE PRODUCION'. Revisa en Drive.")
     else:
         tr = st.selectbox("1️⃣ Tramo", list(conf.keys()), index=None, placeholder="Elige Tramo...")
+        
         if tr:
             nom_arch = conf.get(tr)
             st.info(f"📂 Archivo: {nom_arch}")
-            # --- PROTECCIÓN CACHÉ: Usamos la función optimizada aquí también ---
-            hjs = obtener_hojas_track(nom_arch)
             
-            if not hjs:
-                st.warning("No se encontraron hojas HR TRACK.")
+            # --- ZONA OPTIMIZADA CON CACHÉ ---
+            hjs = obtener_hojas_track_cached(nom_arch)
+            
+            if hjs is None:
+                st.error(f"❌ Error: No puedo conectar con '{nom_arch}'.")
+            elif not hjs:
+                st.warning("⚠️ El archivo no tiene pestañas 'HR TRACK'.")
             else:
                 hj = st.selectbox("2️⃣ Hoja", hjs, index=None, placeholder="Elige Hoja...")
                 if hj:
-                    sh = conectar_por_nombre(nom_arch) # Aquí conectamos solo cuando hace falta
+                    sh = conectar_por_nombre_raw(nom_arch)
                     ws = sh.worksheet(hj)
                     col_a = ws.col_values(1)
                     items = [x for x in col_a if x and len(x)>2 and "ITEM" not in x and "HR TRACK" not in x]
@@ -469,7 +476,7 @@ with tab2:
                         c1.info(f"Cim: {ec or '-'}")
                         if fc: c2.success(f"Hecho: {fc}")
                         elif c2.button("Grabar CIM", key="b_cim"):
-                            guardar_produccion_celda(nom_arch, hj, r, 5, datetime.now().strftime("%d/%m/%Y"))
+                            guardar_produccion(nom_arch, hj, r, 5, datetime.now().strftime("%d/%m/%Y"))
                             if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
                             st.session_state.prod_dia[it].append("CIM"); st.rerun()
                             
@@ -481,7 +488,7 @@ with tab2:
                         c1.info(f"Poste: {ep or '-'}")
                         if fp: c2.success(f"Hecho: {fp}")
                         elif c2.button("Grabar POSTE", key="b_pos"):
-                            guardar_produccion_celda(nom_arch, hj, r, 8, datetime.now().strftime("%d/%m/%Y"))
+                            guardar_produccion(nom_arch, hj, r, 8, datetime.now().strftime("%d/%m/%Y"))
                             if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
                             st.session_state.prod_dia[it].append("POSTE"); st.rerun()
                             
@@ -494,7 +501,7 @@ with tab2:
                         c1.info(f"Ménsula: {m_desc or '-'}")
                         if fm: c2.success(f"Hecho: {fm}")
                         elif c2.button("Grabar MENSULA", key="b_men"):
-                            guardar_produccion_celda(nom_arch, hj, r, 38, datetime.now().strftime("%d/%m/%Y"))
+                            guardar_produccion(nom_arch, hj, r, 38, datetime.now().strftime("%d/%m/%Y"))
                             if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
                             st.session_state.prod_dia[it].append("MENSULA"); st.rerun()
                             
@@ -517,6 +524,6 @@ with tab2:
                         elif done: c2.success("✅ Ya registrados")
                         elif c2.button("Grabar ANCLAJES", key="b_anc"):
                             hoy = datetime.now().strftime("%d/%m/%Y")
-                            for i in idxs: guardar_produccion_celda(nom_arch, hj, r, cols_f[i], hoy)
+                            for i in idxs: guardar_produccion(nom_arch, hj, r, cols_f[i], hoy)
                             if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
                             st.session_state.prod_dia[it].append("ANCLAJES"); st.rerun()
