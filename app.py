@@ -9,7 +9,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 
-# --- CONFIGURACIÓN DE PÁGINA (Debe ser la primera línea) ---
+# --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Gestor SEMI - Tablet", layout="wide", page_icon="🏗️")
 
 # --- NOMBRES EXACTOS DE ARCHIVOS EN GOOGLE DRIVE ---
@@ -23,7 +23,6 @@ FILE_CONFIG_PROD = "ARCHIVOS DE PRODUCION"
 @st.cache_resource
 def get_gspread_client():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-    # Lee la llave secreta desde Streamlit
     creds_dict = dict(st.secrets["gcp_service_account"])
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
@@ -41,7 +40,6 @@ def conectar_hoja(nombre_archivo):
 # ==========================================
 
 def cargar_vehiculos_dict():
-    """Devuelve un diccionario {Matricula: Info_Extra}"""
     sh = conectar_hoja(FILE_VEHICULOS)
     if not sh: return {}
     try:
@@ -51,10 +49,7 @@ def cargar_vehiculos_dict():
         for fila in datos:
             if not fila: continue
             nombre = str(fila[0]).strip()
-            # Filtramos cabeceras
             if nombre.lower() in ["nombre", "vehiculo", "vehicle", "nan", ""]: continue
-            
-            # Leemos la info extra de la Columna B (índice 1) si existe
             info = str(fila[1]).strip() if len(fila) > 1 else ""
             diccionario[nombre] = info
         return diccionario
@@ -67,19 +62,16 @@ def cargar_trabajadores():
         try: ws = sh.worksheet("Roster")
         except: ws = sh.sheet1
             
-        # Leemos todos los datos para procesar en memoria (más rápido)
         datos = ws.get_all_values()
         lista_trabajadores = []
         
-        # Empezamos a leer desde la fila 9 (índice 8) según tu formato
+        # Leemos desde fila 9
         for fila in datos[8:]:
             if len(fila) < 2: continue
             
-            uid = str(fila[0]).strip()    # Col A: ID
-            nombre = str(fila[1]).strip() # Col B: Nombre
+            uid = str(fila[0]).strip()
+            nombre = str(fila[1]).strip()
             
-            # --- DETECCIÓN AUTOMÁTICA DE ALMACÉN ---
-            # Miramos la Columna C (índice 2) buscando una "A"
             tipo = "OBRA"
             if len(fila) > 2:
                 marca = str(fila[2]).strip().upper()
@@ -99,21 +91,17 @@ def cargar_trabajadores():
         return []
 
 def buscar_columna_dia(ws, dia_num):
-    # Busca el número del día en las cabeceras (Filas 4 a 9)
     header_rows = ws.get_values("E4:AX9") 
     for r_idx, row in enumerate(header_rows):
         for c_idx, val in enumerate(row):
             if val and (str(val).strip() == str(dia_num)):
-                # c_idx es relativo a la col E (5), así que sumamos 5
                 return c_idx + 5 
-    
-    # Si falla la búsqueda visual, usa cálculo matemático por defecto
     dias_dif = int(dia_num) - 21
     if dias_dif < 0: dias_dif += 30
     return 14 + (dias_dif * 2)
 
 # ==========================================
-#          LÓGICA DE GUARDADO (CLOUD)
+#          LÓGICA DE GUARDADO
 # ==========================================
 
 def guardar_parte_en_nube(fecha_dt, lista_trabajadores, vehiculo, datos_paralizacion):
@@ -123,29 +111,19 @@ def guardar_parte_en_nube(fecha_dt, lista_trabajadores, vehiculo, datos_paraliza
         try: ws = sh.worksheet("Roster")
         except: ws = sh.sheet1
         
-        # 1. Buscar columna del día
         col_dia = buscar_columna_dia(ws, fecha_dt.day)
-        
-        # 2. Preparar actualizaciones en lote (Batch Update)
-        col_ids = ws.col_values(1) # Leemos columna A para buscar filas
+        col_ids = ws.col_values(1)
         cells_to_update = []
         
         for t in lista_trabajadores:
             try:
-                # Buscamos la fila del ID (+1 porque gspread empieza en 1)
                 fila = col_ids.index(t['ID']) + 1 
-                
-                # Turno en la columna del día
                 cells_to_update.append(gspread.Cell(fila, col_dia, t['Turno_Letra']))
-                # Horas en la columna siguiente (día + 1)
                 cells_to_update.append(gspread.Cell(fila, col_dia + 1, t['Total_Horas']))
-            except:
-                pass # Si no encuentra el ID, lo salta
+            except: pass
                 
-        if cells_to_update:
-            ws.update_cells(cells_to_update)
+        if cells_to_update: ws.update_cells(cells_to_update)
 
-        # 3. Guardar Paralización (si existe)
         if datos_paralizacion:
             try: ws_para = sh.worksheet("Paralizaciones")
             except: 
@@ -153,21 +131,16 @@ def guardar_parte_en_nube(fecha_dt, lista_trabajadores, vehiculo, datos_paraliza
                 ws_para.append_row(["Fecha", "Vehiculo", "Inicio", "Fin", "Horas", "Motivo"])
             
             ws_para.append_row([
-                str(fecha_dt.date()), 
-                vehiculo, 
-                datos_paralizacion['inicio'], 
-                datos_paralizacion['fin'], 
-                datos_paralizacion['duracion'], 
-                datos_paralizacion['motivo']
+                str(fecha_dt.date()), vehiculo, datos_paralizacion['inicio'], 
+                datos_paralizacion['fin'], datos_paralizacion['duracion'], datos_paralizacion['motivo']
             ])
-            
         return True
     except Exception as e:
         st.error(f"Error al guardar: {e}")
         return False
 
 # ==========================================
-#          LÓGICA DE PRODUCCIÓN
+#          PRODUCCIÓN Y PDF
 # ==========================================
 
 def cargar_config_prod():
@@ -177,7 +150,6 @@ def cargar_config_prod():
         datos = sh.sheet1.get_all_values()
         config = {}
         for row in datos:
-            # Asume Col A = Nombre Tramo, Col B = Nombre Archivo Excel
             if len(row) >= 2 and row[0] and row[1]:
                 config[row[0].strip()] = row[1].strip()
         return config
@@ -194,23 +166,17 @@ def guardar_produccion(archivo_prod, hoja_prod, fila, col, valor):
         st.error(f"Error guardando producción: {e}")
         return False
 
-# ==========================================
-#          GENERADOR DE PDF (ReportLab)
-# ==========================================
 def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
     buffer = BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
     _, height = A4
     
-    # Cabecera
     c.setFont("Helvetica-Bold", 16)
     c.drawString(50, height - 50, "Daily Work Log - SEMI ISRAEL")
     c.setFont("Helvetica", 10)
-    c.drawString(50, height - 80, f"Date: {fecha_str} | Vehicle/Team: {jefe}")
+    c.drawString(50, height - 80, f"Date: {fecha_str} | Team: {jefe}")
     
     y = height - 120
-    
-    # Tabla Trabajadores
     c.setFont("Helvetica-Bold", 9)
     c.drawString(50, y, "ID - Name")
     c.drawString(300, y, "Time")
@@ -220,40 +186,25 @@ def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
     c.setFont("Helvetica", 9)
     
     for t in trabajadores:
-        txt_trab = f"{t['ID']} - {t['Nombre']}"
-        txt_time = f"{t['H_Inicio']} - {t['H_Fin']}"
-        
-        c.drawString(50, y, txt_trab[:45])
-        c.drawString(300, y, txt_time)
+        c.drawString(50, y, f"{t['ID']} - {t['Nombre']}"[:45])
+        c.drawString(300, y, f"{t['H_Inicio']} - {t['H_Fin']}")
         c.drawString(400, y, str(t['Total_Horas']))
         c.drawString(450, y, t['Turno_Letra'])
         y -= 15
-        
-        if y < 100: # Nueva página si se llena
-            c.showPage()
-            y = height - 50
+        if y < 100: c.showPage(); y = height - 50
             
-    # Paralizaciones
     if datos_para:
         y -= 20
         c.setFillColor(colors.red)
-        c.setFont("Helvetica-Bold", 10)
-        c.drawString(50, y, f"⚠️ DELAY: {datos_para['motivo']}")
-        c.setFont("Helvetica", 9)
-        c.drawString(50, y - 15, f"Time Lost: {datos_para['inicio']} to {datos_para['fin']} ({datos_para['duracion']}h)")
+        c.drawString(50, y, f"⚠️ DELAY: {datos_para['motivo']} ({datos_para['duracion']}h)")
         c.setFillColor(colors.black)
         y -= 40
         
-    # Producción Realizada
     if prod_dia:
-        y -= 20
-        c.setFont("Helvetica-Bold", 10)
-        c.drawString(50, y, "Production / Works Done:")
-        y -= 15
-        c.setFont("Helvetica", 9)
-        for item, acts in prod_dia.items():
-            linea = f"• Item {item}: {', '.join(acts)}"
-            c.drawString(60, y, linea)
+        c.drawString(50, y - 20, "Production:")
+        y -= 35
+        for k, v in prod_dia.items():
+            c.drawString(60, y, f"- {k}: {', '.join(v)}")
             y -= 15
             
     c.save()
@@ -261,64 +212,49 @@ def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
     return buffer
 
 # ==========================================
-#           INTERFAZ DE USUARIO (GUI)
+#           INTERFAZ DE USUARIO
 # ==========================================
 
-# Variables de Sesión para mantener datos al recargar
 if 'lista_sel' not in st.session_state: st.session_state.lista_sel = []
 if 'prod_dia' not in st.session_state: st.session_state.prod_dia = {}
 
-# Pestañas Superiores
 tab1, tab2 = st.tabs(["📝 Partes de Trabajo", "🏗️ Producción"])
 
-# ------------------------------------------
-#           PESTAÑA 1: PARTES
-# ------------------------------------------
+# ---------------- PESTAÑA 1 ----------------
 with tab1:
     st.subheader("Datos Generales")
-    
-    # 1. FILA DE FECHA Y VEHÍCULO
     c_f1, c_f2, c_f3, c_veh, c_info = st.columns([1, 1, 1, 2, 2])
     
-    # Selectores de Fecha Independientes
     hoy = datetime.now()
     dia = c_f1.selectbox("Día", [i for i in range(1, 32)], index=hoy.day-1)
     mes = c_f2.selectbox("Mes", [i for i in range(1, 13)], index=hoy.month-1)
     ano = c_f3.selectbox("Año", [2024, 2025, 2026], index=1)
-    
-    try:
-        fecha_sel = datetime(ano, mes, dia)
-    except:
-        st.error("Fecha inválida")
-        fecha_sel = hoy
+    try: fecha_sel = datetime(ano, mes, dia)
+    except: fecha_sel = hoy; st.error("Fecha incorrecta")
 
-    # Carga de Vehículos (Diccionario)
     dicc_vehiculos = cargar_vehiculos_dict()
     if dicc_vehiculos:
-        nombres_veh = list(dicc_vehiculos.keys())
+        # Añadimos espacio en blanco al vehículo también si quieres
+        nombres_veh = [""] + list(dicc_vehiculos.keys())
         vehiculo_sel = c_veh.selectbox("Vehículo / Encargado", nombres_veh)
-        # Info automática
         info_extra = dicc_vehiculos.get(vehiculo_sel, "")
-        c_info.text_input("Detalle / Matrícula", value=info_extra, disabled=True)
+        c_info.text_input("Detalle", value=info_extra, disabled=True)
     else:
-        vehiculo_sel = c_veh.selectbox("Vehículo", ["Cargando..."])
+        vehiculo_sel = c_veh.selectbox("Vehículo", ["Error Carga"])
         c_info.text_input("Detalle", disabled=True)
         
     st.divider()
     
-    # 2. FILTRO DE PERSONAL (BOTONES RADIALES)
     st.write("**Filtrar Personal:**")
     filtro = st.radio("Filtro", ["TODOS", "OBRA", "ALMACEN"], horizontal=True, label_visibility="collapsed")
     
-    # 3. AÑADIR OPERARIO
     c_add1, c_add2, c_add3, c_add4, c_add5 = st.columns([3, 1, 1, 1, 1])
     
     todos_trabajadores = cargar_trabajadores()
     
-    # Lógica de filtrado
     if filtro == "ALMACEN":
         filtrados = [t for t in todos_trabajadores if t['tipo'] == "ALMACEN"]
-        default_comida = True # Almacén marca comida por defecto
+        default_comida = True 
     elif filtro == "OBRA":
         filtrados = [t for t in todos_trabajadores if t['tipo'] != "ALMACEN"]
         default_comida = False
@@ -329,70 +265,118 @@ with tab1:
     if not filtrados:
         opciones_nombres = ["Sin resultados"]
     else:
-        opciones_nombres = [t['display'] for t in filtrados]
+        # ¡AQUÍ ESTÁ EL CAMBIO! Añadimos espacio en blanco al principio
+        opciones_nombres = [""] + [t['display'] for t in filtrados]
         
     trabajador_sel = c_add1.selectbox("Seleccionar Operario", opciones_nombres)
     
-    # Horas por defecto
     h_ini_def = datetime.strptime("07:00", "%H:%M").time()
     h_fin_def = datetime.strptime("16:00", "%H:%M").time()
-    
     h_ini = c_add2.time_input("Inicio", h_ini_def)
     h_fin = c_add3.time_input("Fin", h_fin_def)
     turno_manual = c_add4.selectbox("Turno", ["AUT", "D", "N"])
     desc_comida = c_add5.checkbox("-1h Comida", value=default_comida)
     
-    # Botón Añadir
     if st.button("➕ AÑADIR A LA LISTA", use_container_width=True, type="secondary"):
-        if trabajador_sel and trabajador_sel != "Sin resultados":
-            # Cálculos de horas
+        # Verificamos que no esté vacío
+        if trabajador_sel and trabajador_sel != "Sin resultados" and trabajador_sel != "":
             t_i = datetime.combine(fecha_sel, h_ini)
             t_f = datetime.combine(fecha_sel, h_fin)
-            if t_f < t_i: t_f += timedelta(days=1) # Turno noche cruza día
+            if t_f < t_i: t_f += timedelta(days=1)
+            horas = (t_f - t_i).total_seconds() / 3600
             
-            horas_totales = (t_f - t_i).total_seconds() / 3600
-            
-            # Auto-detección turno
-            es_noche = False
-            t_letra = "D"
+            es_noche, t_letra = False, "D"
             if turno_manual == "N" or (turno_manual=="AUT" and (h_ini.hour>=21 or h_ini.hour<=4)):
                 es_noche, t_letra = True, "N"
             
-            if desc_comida: horas_totales = max(0, horas_totales - 1)
+            if desc_comida: horas = max(0, horas - 1)
             
-            # Extraer ID y Nombre
             parts = trabajador_sel.split(" - ", 1)
-            uid = parts[0]
-            nombre = parts[1] if len(parts)>1 else uid
-            
             st.session_state.lista_sel.append({
-                "ID": uid, "Nombre": nombre, 
+                "ID": parts[0], "Nombre": parts[1] if len(parts)>1 else parts[0], 
                 "H_Inicio": h_ini.strftime("%H:%M"), "H_Fin": h_fin.strftime("%H:%M"),
-                "Total_Horas": round(horas_totales, 2), 
-                "Turno_Letra": t_letra, 
-                "Es_Noche": es_noche
+                "Total_Horas": round(horas, 2), "Turno_Letra": t_letra, "Es_Noche": es_noche
             })
+        else:
+            st.warning("⚠️ Por favor, selecciona un operario de la lista.")
 
-    # 4. TABLA VISUAL DE LA CUADRILLA
     if st.session_state.lista_sel:
         st.markdown("### 📋 Cuadrilla del Día")
         df_show = pd.DataFrame(st.session_state.lista_sel)
-        # Mostramos solo columnas útiles
         st.dataframe(df_show[["ID", "Nombre", "H_Inicio", "H_Fin", "Total_Horas", "Turno_Letra"]], use_container_width=True)
-        
-        if st.button("🗑️ Borrar toda la lista"):
-            st.session_state.lista_sel = []
-            st.rerun()
+        if st.button("🗑️ Borrar lista"): st.session_state.lista_sel = []; st.rerun()
 
     st.divider()
     
-    # 5. PARALIZACIONES
-    tiene_para = st.checkbox("🛑 Registrar Paralización / Retraso")
+    tiene_para = st.checkbox("🛑 Registrar Paralización")
     d_para = None
     if tiene_para:
         c_p1, c_p2, c_p3 = st.columns([1, 1, 2])
         hi_p = c_p1.time_input("Inicio Parada")
         hf_p = c_p2.time_input("Fin Parada")
-        motivo_p = c_p3.text_input("Motivo / Causa")
-        
-        # Calcular duración parada
+        motivo_p = c_p3.text_input("Motivo")
+        d1, d2 = datetime.combine(datetime.today(), hi_p), datetime.combine(datetime.today(), hf_p)
+        dur_p = round((d2 - d1).total_seconds() / 3600, 2)
+        d_para = {"inicio": str(hi_p), "fin": str(hf_p), "duracion": max(0, dur_p), "motivo": motivo_p}
+
+    if st.button("💾 GUARDAR PARTE", type="primary", use_container_width=True):
+        if not st.session_state.lista_sel: st.error("Lista vacía.")
+        elif not vehiculo_sel: st.error("Falta seleccionar vehículo.")
+        else:
+            with st.spinner("Guardando..."):
+                ok = guardar_parte_en_nube(fecha_sel, st.session_state.lista_sel, vehiculo_sel, d_para)
+                if ok:
+                    pdf = generar_pdf_bytes(str(fecha_sel.date()), vehiculo_sel, st.session_state.lista_sel, d_para, st.session_state.prod_dia)
+                    st.success("¡Guardado!")
+                    st.download_button("📥 Descargar PDF", pdf, f"Parte_{fecha_sel.date()}.pdf", "application/pdf")
+                    st.session_state.lista_sel = []; st.session_state.prod_dia = {}; time.sleep(2); st.rerun()
+
+# ---------------- PESTAÑA 2 ----------------
+with tab2:
+    st.header("🏗️ Control de Producción")
+    config_prod = cargar_config_prod()
+    if not config_prod: st.warning("Configuración no encontrada en Drive.")
+    else:
+        tramo_sel = st.selectbox("Seleccionar Tramo", list(config_prod.keys()))
+        archivo_prod = config_prod.get(tramo_sel)
+        if archivo_prod:
+            sh_prod = conectar_hoja(archivo_prod)
+            if sh_prod:
+                hojas = [ws.title for ws in sh_prod.worksheets() if "HR TRACK" in ws.title.upper()]
+                hoja_sel = st.selectbox("Hoja de Seguimiento", hojas) if hojas else None
+                if hoja_sel:
+                    ws_prod = sh_prod.worksheet(hoja_sel)
+                    col_a = ws_prod.col_values(1)
+                    items = [x for x in col_a if x and len(x)>2 and x.upper() not in ["ITEM","HR TRACK","TOTAL"]]
+                    filtro_km = st.text_input("🔍 Filtro Rápido (Km):")
+                    if filtro_km: items = [i for i in items if filtro_km in i]
+                    item_sel = st.selectbox("Elemento", items)
+                    
+                    if item_sel:
+                        fila = col_a.index(item_sel) + 1
+                        st.markdown(f"### {item_sel}")
+                        
+                        # Cimentación
+                        c1, c2 = st.columns(2)
+                        ec, fc = ws_prod.cell(fila, 3).value, ws_prod.cell(fila, 5).value
+                        c1.metric("Cimentación", str(ec) if ec else "---")
+                        if fc: c2.success(f"Hecho: {fc}")
+                        elif c2.button("✅ Marcar CIM"):
+                            guardar_produccion(archivo_prod, hoja_sel, fila, 5, datetime.now().strftime("%d/%m/%Y"))
+                            if item_sel not in st.session_state.prod_dia: st.session_state.prod_dia[item_sel] = []
+                            st.session_state.prod_dia[item_sel].append("CIM")
+                            st.rerun()
+                        
+                        st.divider()
+                        
+                        # Poste
+                        c1, c2 = st.columns(2)
+                        ep, fp = ws_prod.cell(fila, 6).value, ws_prod.cell(fila, 8).value
+                        c1.metric("Poste", str(ep) if ep else "---")
+                        if fp: c2.success(f"Hecho: {fp}")
+                        elif c2.button("✅ Marcar POSTE"):
+                            guardar_produccion(archivo_prod, hoja_sel, fila, 8, datetime.now().strftime("%d/%m/%Y"))
+                            if item_sel not in st.session_state.prod_dia: st.session_state.prod_dia[item_sel] = []
+                            st.session_state.prod_dia[item_sel].append("POSTE")
+                            st.rerun()
+
