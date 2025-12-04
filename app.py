@@ -77,7 +77,25 @@ def enviar_email_pdf(pdf_buffer, nombre_archivo, fecha_str, jefe):
     except: return False
 
 # ==========================================
-#      CARGA DE DATOS
+#      HELPERS EXCEL
+# ==========================================
+def buscar_columna_dia(ws, dia_num):
+    # Buscamos en las filas de cabecera (4 a 9)
+    header_rows = ws.get_values("E4:AX9") 
+    for r_idx, row in enumerate(header_rows):
+        for c_idx, val in enumerate(row):
+            if val and (str(val).strip() == str(dia_num)):
+                # c_idx es relativo a la columna E (índice 5)
+                # +5 para ajustarlo a índice real de hoja (1-based)
+                return c_idx + 5 
+    
+    # Fallback matemático si no lo encuentra visualmente
+    dias_dif = int(dia_num) - 21
+    if dias_dif < 0: dias_dif += 30
+    return 14 + (dias_dif * 2)
+
+# ==========================================
+#      CARGA DE DATOS (INTELIGENTE)
 # ==========================================
 @st.cache_data(ttl=600)
 def cargar_vehiculos_dict():
@@ -96,27 +114,66 @@ def cargar_vehiculos_dict():
         return diccionario
     except: return {}
 
-@st.cache_data(ttl=600)
-def cargar_trabajadores():
+# ⚠️ ESTA FUNCIÓN AHORA NO TIENE CACHÉ LARGA PARA PODER FILTRAR EN TIEMPO REAL
+def cargar_trabajadores_disponibles(fecha_dt):
     sh = conectar_por_id(ID_ROSTER)
     if not sh: return []
     try:
         try: ws = sh.worksheet("Roster")
         except: ws = sh.sheet1
+        
+        # 1. Buscamos la columna del día seleccionado
+        col_dia = buscar_columna_dia(ws, fecha_dt.day)
+        
+        # 2. Leemos TODOS los datos de golpe para ser rápidos
         datos = ws.get_all_values()
+        
         lista_trabajadores = []
-        for fila in datos[8:]:
+        
+        # Iteramos desde la fila 9 (índice 8)
+        # datos[fila][columna] -> Ojo, índices de lista son 0-based
+        idx_col_dia = col_dia - 1 
+        
+        for i, fila in enumerate(datos[8:], start=8):
             if len(fila) < 2: continue
+            
             uid = str(fila[0]).strip()
             nombre = str(fila[1]).strip()
+            
+            # --- CHEQUEO DE DISPONIBILIDAD ---
+            # Miramos si en la columna del turno o de las horas hay algo escrito
+            # La columna de horas es col_dia + 1
+            idx_col_horas = idx_col_dia + 1
+            
+            registrado = False
+            # Verificamos que la fila tenga suficientes columnas antes de leer
+            if len(fila) > idx_col_dia:
+                val_turno = str(fila[idx_col_dia]).strip()
+                if val_turno and val_turno not in ["", "None"]:
+                    registrado = True
+            
+            # Si ya está registrado, LO SALTAMOS (no lo añadimos a la lista)
+            if registrado:
+                continue
+
+            # --- DETECCIÓN TIPO (ALMACEN) ---
             tipo = "OBRA"
             if len(fila) > 2:
                 marca = str(fila[2]).strip().upper()
                 if marca == "A" or "ALMACEN" in marca: tipo = "ALMACEN"
+            
             if uid and nombre and uid.lower() != "id":
-                lista_trabajadores.append({"display": f"{uid} - {nombre}", "tipo": tipo, "id": uid, "nombre_solo": nombre})
+                lista_trabajadores.append({
+                    "display": f"{uid} - {nombre}",
+                    "tipo": tipo,
+                    "id": uid,
+                    "nombre_solo": nombre
+                })
+                
         return lista_trabajadores
-    except: return []
+    except Exception as e:
+        st.error(f"Error filtro roster: {e}")
+        return []
 
 @st.cache_data(ttl=600)
 def cargar_config_prod():
@@ -130,15 +187,6 @@ def cargar_config_prod():
         return config
     except: return {}
 
-def buscar_columna_dia(ws, dia_num):
-    header_rows = ws.get_values("E4:AX9") 
-    for r_idx, row in enumerate(header_rows):
-        for c_idx, val in enumerate(row):
-            if val and (str(val).strip() == str(dia_num)): return c_idx + 5 
-    dias_dif = int(dia_num) - 21
-    if dias_dif < 0: dias_dif += 30
-    return 14 + (dias_dif * 2)
-
 # ==========================================
 #          GUARDADO EXCEL
 # ==========================================
@@ -151,12 +199,16 @@ def guardar_parte_en_nube(fecha_dt, lista_trabajadores, vehiculo, datos_paraliza
         col_dia = buscar_columna_dia(ws, fecha_dt.day)
         col_ids = ws.col_values(1)
         cells_to_update = []
+        
         for t in lista_trabajadores:
             try:
                 fila = col_ids.index(t['ID']) + 1 
+                # Doble chequeo de seguridad: Ver si ya hay dato antes de sobrescribir
+                # (Opcional, pero recomendado. Aquí confiamos en el filtro de la UI)
                 cells_to_update.append(gspread.Cell(fila, col_dia, t['Turno_Letra']))
                 cells_to_update.append(gspread.Cell(fila, col_dia + 1, t['Total_Horas']))
             except: pass
+            
         if cells_to_update: ws.update_cells(cells_to_update)
 
         if datos_paralizacion:
@@ -178,24 +230,22 @@ def guardar_produccion(archivo_prod, hoja_prod, fila, col, valor):
     except: return False
 
 # ==========================================
-#      GENERADOR PDF (DISEÑO EXACTO)
+#      GENERADOR PDF
 # ==========================================
 def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
     buffer = BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
     _, height = A4
     
-    # 1. HEADER LOGIC (Horas del primero)
     start_time = "________"
     end_time = "________"
     if trabajadores:
         start_time = trabajadores[0]['H_Inicio']
         end_time = trabajadores[0]['H_Fin']
 
-    # 2. CABECERA
     y = height - 90
     c.setLineWidth(1)
-    c.rect(40, y - 60, 515, 70) # Caja principal
+    c.rect(40, y - 60, 515, 70) 
 
     c.setFont("Helvetica-Bold", 16)
     c.drawString(50, height - 50, "Daily Work Log - SEMI ISRAEL")
@@ -209,18 +259,14 @@ def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
     c.drawString(200, y - 45, f"End Time: {end_time}")
     c.drawString(350, y - 45, "Weather: ________")
 
-    # 3. TABLA (REDISEÑADA IDÉNTICA)
     y_cursor = y - 80
-    
-    # Cabecera Azul
     c.setFillColor(colors.HexColor("#2980B9"))
     c.rect(40, y_cursor, 515, 20, fill=1)
     c.setFillColor(colors.white)
     c.setFont("Helvetica-Bold", 8)
     
-    # Columnas exactas
     headers = ["Employee Name", "ID Number", "Company", "Profession", "Normal", "Extra", "Night"]
-    x_coords = [40, 180, 260, 330, 400, 450, 500, 555] # Posiciones verticales
+    x_coords = [40, 180, 260, 330, 400, 450, 500, 555] 
     
     c.drawString(x_coords[0] + 5, y_cursor + 6, headers[0])
     c.drawString(x_coords[1] + 5, y_cursor + 6, headers[1])
@@ -235,49 +281,38 @@ def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
     c.setFont("Helvetica", 9)
     y_tabla_start = y - 80
     
-    # Rellenar filas
     for t in trabajadores:
-        # Calcular horas normales vs extra
         h_total = float(t['Total_Horas'])
         h_base = 8.0 if h_total > 8 else h_total
         h_extra = h_total - 8.0 if h_total > 8 else 0.0
         
-        # Nombre e ID
         c.drawString(x_coords[0] + 5, y_cursor + 6, t['Nombre'][:25])
         c.drawString(x_coords[1] + 5, y_cursor + 6, str(t['ID']))
         c.drawString(x_coords[2] + 5, y_cursor + 6, "SEMI")
         c.drawString(x_coords[3] + 5, y_cursor + 6, "Official")
         
-        # Lógica de columnas de horas (Night vs Normal)
         if t['Es_Noche']:
-            # Si es noche, las base van a la columna "Night" (índice 6 -> x_coords[6])
             c.drawString(x_coords[6] + 10, y_cursor + 6, f"{h_base:g}")
         else:
-            # Si es día, las base van a la columna "Normal" (índice 4 -> x_coords[4])
             c.drawString(x_coords[4] + 10, y_cursor + 6, f"{h_base:g}")
             
-        # Extras siempre en columna Extra (índice 5)
         if h_extra > 0:
             c.drawString(x_coords[5] + 10, y_cursor + 6, f"{h_extra:g}")
             
-        # Linea fila
         c.setLineWidth(0.5)
         c.line(40, y_cursor, 555, y_cursor)
         y_cursor -= 20
         
-        if y_cursor < 150: # Salto de página si llenamos
+        if y_cursor < 150: 
             c.showPage()
             y_cursor = height - 50
             
-    # Completar líneas verticales hasta el final de los datos
     y_final_tabla = y_cursor + 20
     c.setLineWidth(1)
-    # Dibujamos las rayas verticales
     for x in x_coords:
-        c.line(x, y_tabla_start + 20, x, y_final_tabla - 20) # Desde cabecera hasta fin
-    c.line(555, y_tabla_start + 20, 555, y_final_tabla - 20) # Cierre derecho
+        c.line(x, y_tabla_start + 20, x, y_final_tabla - 20) 
+    c.line(555, y_tabla_start + 20, 555, y_final_tabla - 20) 
 
-    # 4. PARALIZACIONES
     y_cursor -= 10
     if datos_para:
         c.setStrokeColor(colors.red)
@@ -293,7 +328,6 @@ def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
         c.setStrokeColor(colors.black)
         c.setLineWidth(1)
 
-    # 5. FOOTER (Producción + Firma)
     y_footer_top = 130
     altura_activities = y_cursor - y_footer_top
     
@@ -311,12 +345,10 @@ def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
                 c.line(40, y_line, 555, y_line)
                 y_line -= 20
         
-        # Rellenar con líneas vacías hasta abajo
         while y_line > y_footer_top + 5:
             c.line(40, y_line, 555, y_line)
             y_line -= 20
             
-    # Caja Final Firma
     c.setLineWidth(1)
     c.rect(40, 30, 515, 90)
     c.setFont("Helvetica-Bold", 10)
@@ -362,7 +394,10 @@ with tab1:
     st.write("**Filtrar Personal:**")
     filtro = st.radio("Filtro", ["TODOS", "OBRA", "ALMACEN"], horizontal=True, label_visibility="collapsed")
     c_add1, c_add2, c_add3, c_add4, c_add5 = st.columns([3, 1, 1, 1, 1])
-    todos_trabajadores = cargar_trabajadores()
+    
+    # CARGA INTELIGENTE (FILTRA LOS YA FICHADOS ESE DÍA)
+    with st.spinner("Buscando personal disponible..."):
+        todos_trabajadores = cargar_trabajadores_disponibles(fecha_sel)
     
     if filtro == "ALMACEN":
         filtrados = [t for t in todos_trabajadores if t['tipo'] == "ALMACEN"]
@@ -374,7 +409,11 @@ with tab1:
         filtrados = todos_trabajadores
         default_comida = False
         
-    opciones_nombres = [""] + [t['display'] for t in filtrados] if filtrados else ["Sin resultados"]
+    if not filtrados:
+        opciones_nombres = ["Sin personal disponible"]
+    else:
+        opciones_nombres = [""] + [t['display'] for t in filtrados]
+        
     trabajador_sel = c_add1.selectbox("Seleccionar Operario", opciones_nombres)
     
     h_ini = c_add2.time_input("Inicio", datetime.strptime("07:00", "%H:%M").time())
@@ -383,7 +422,7 @@ with tab1:
     desc_comida = c_add5.checkbox("-1h Comida", value=default_comida)
     
     if st.button("➕ AÑADIR A LA LISTA", use_container_width=True, type="secondary"):
-        if trabajador_sel and trabajador_sel != "Sin resultados" and trabajador_sel != "":
+        if trabajador_sel and trabajador_sel != "Sin personal disponible" and trabajador_sel != "":
             t_i = datetime.combine(fecha_sel, h_ini)
             t_f = datetime.combine(fecha_sel, h_fin)
             if t_f < t_i: t_f += timedelta(days=1)
@@ -426,7 +465,7 @@ with tab1:
         if not st.session_state.lista_sel: st.error("Lista vacía.")
         elif not vehiculo_sel: st.error("Falta seleccionar vehículo.")
         else:
-            with st.spinner("Guardando..."):
+            with st.spinner("Guardando en la Nube y Enviando Email..."):
                 ok_datos = guardar_parte_en_nube(fecha_sel, st.session_state.lista_sel, vehiculo_sel, d_para)
                 pdf_bytes = generar_pdf_bytes(str(fecha_sel.date()), vehiculo_sel, st.session_state.lista_sel, d_para, st.session_state.prod_dia)
                 nombre_pdf = f"Parte_{fecha_sel.strftime('%Y-%m-%d')}_{vehiculo_sel}.pdf"
@@ -434,13 +473,13 @@ with tab1:
                 try:
                     if "email" in st.secrets:
                         enviado = enviar_email_pdf(pdf_bytes, nombre_pdf, str(fecha_sel.date()), vehiculo_sel)
-                        msg = "📧 Email enviado." if enviado else "⚠️ Fallo al enviar email."
-                    else: msg = "⚠️ Configura Email en Secrets."
-                except: msg = "⚠️ Error Email."
+                        msg_email = "📧 Email enviado." if enviado else "⚠️ Fallo al enviar email."
+                    else: msg_email = "⚠️ Configura Email en Secrets."
+                except: msg_email = "⚠️ Error Email."
 
                 if ok_datos:
-                    st.success(f"✅ ¡Guardado! {msg}")
-                    st.download_button("📥 Descargar Copia", pdf_bytes, nombre_pdf, "application/pdf")
+                    st.success(f"✅ ¡Guardado! {msg_email}")
+                    st.download_button("📥 Descargar Copia en Tablet", pdf_bytes, nombre_pdf, "application/pdf")
                     st.session_state.lista_sel = []; st.session_state.prod_dia = {}; time.sleep(5); st.rerun()
 
 # ---------------- PESTAÑA 2 ----------------
