@@ -22,12 +22,11 @@ from gspread.utils import rowcol_to_a1
 st.set_page_config(page_title="Gestor SEMI - Tablet", layout="wide", page_icon="🏗️")
 
 # --- IDs ---
-ID_ROSTER = "1ezFvpyTzkL98DJjpXeeGuqbMy_kTZItUC9FDkxFlD08"
 ID_VEHICULOS = "19PWpeCz8pl5NEDpK-omX5AdrLuJgOPrn6uSjtUGomY8"
 ID_CONFIG_PROD = "1uCu5pq6l1CjqXKPEkGkN-G5Z5K00qiV9kR_bGOii6FU"
 
 # ==========================================
-#           LOGIN AUTOMÁTICO
+#           LOGIN
 # ==========================================
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = True
@@ -54,7 +53,7 @@ def conectar_flexible(referencia):
             except: return None
 
 # ==========================================
-#      CARGA MASIVA (CACHÉ)
+#      CARGA MASIVA
 # ==========================================
 @st.cache_data(ttl=300) 
 def cargar_datos_completos_hoja(nombre_archivo, nombre_hoja):
@@ -78,55 +77,51 @@ def safe_val(lista, indice):
     return None
 
 # ==========================================
-#      CARGAS DATOS CONFIGURACIÓN
+#      SIDEBAR (SELECTOR ROSTER)
 # ==========================================
-@st.cache_data(ttl=600)
-def cargar_vehiculos_dict():
-    sh = conectar_flexible(ID_VEHICULOS)
-    if not sh: return {}
-    try:
-        return {r[0]: (r[1] if len(r)>1 else "") for r in sh.sheet1.get_all_values() if r and r[0] and "veh" not in r[0].lower()}
-    except: return {}
-
-@st.cache_data(ttl=600)
-def cargar_config_prod():
-    sh = conectar_flexible(ID_CONFIG_PROD)
-    if not sh: return {}
-    try:
-        return {r[0].strip(): r[1].strip() for r in sh.sheet1.get_all_values() if len(r)>1 and r[0]}
-    except: return {}
-
 @st.cache_data(ttl=300)
 def buscar_archivos_roster():
     try:
         creds_dict = dict(st.secrets["gcp_service_account"])
         creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=['https://www.googleapis.com/auth/drive'])
         service = build('drive', 'v3', credentials=creds)
+        # Busca solo Hojas de Google que tengan "Roster" en el nombre
         results = service.files().list(q="name contains 'Roster' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false", fields="files(id, name)", orderBy="name desc").execute()
         return {f['name']: f['id'] for f in results.get('files', [])}
     except: return {}
 
-# ==========================================
-#      SIDEBAR (CONFIGURACIÓN IZQUIERDA)
-# ==========================================
+# Sidebar Lógica
 with st.sidebar:
     st.write(f"👤 **{st.session_state.user_name}**")
     st.markdown("---")
     
-    # 1. SELECTOR DE ROSTER (Mes)
-    st.caption("📅 CONFIGURACIÓN MES")
+    st.caption("📅 ROSTER ACTIVO")
     archivos_roster = buscar_archivos_roster()
     ID_ROSTER_ACTIVO = None
-    if archivos_roster:
-        nombre_roster_sel = list(archivos_roster.keys())[0] # Auto-select el más nuevo
-        ID_ROSTER_ACTIVO = archivos_roster[nombre_roster_sel]
-        st.success(f"Mes: {nombre_roster_sel}")
-    else: st.error("No hay Rosters.")
     
-    st.markdown("---")
+    if archivos_roster:
+        # Seleccionamos el primero (el más reciente) por defecto
+        nombre_roster_sel = list(archivos_roster.keys())[0]
+        ID_ROSTER_ACTIVO = archivos_roster[nombre_roster_sel]
+        st.success(f"{nombre_roster_sel}")
+        
+        # Opción para cambiar si eres Admin (o si quieres dejarlo abierto ahora)
+        # st.selectbox("Cambiar mes:", list(archivos_roster.keys())) 
+    else:
+        st.error("❌ No encuentro archivos 'Roster'.")
+        st.caption("Asegúrate de que en Drive es una 'Hoja de cálculo de Google' y no un Excel (.xlsx).")
 
-    # 2. SELECTOR DE TRAMO (Producción)
+    st.markdown("---")
+    
     st.caption("🏗️ PROYECTO / TRAMO")
+    @st.cache_data(ttl=600)
+    def cargar_config_prod():
+        sh = conectar_flexible(ID_CONFIG_PROD)
+        if not sh: return {}
+        try:
+            return {r[0].strip(): r[1].strip() for r in sh.sheet1.get_all_values() if len(r)>1 and r[0]}
+        except: return {}
+        
     conf_prod = cargar_config_prod()
     TRAMO_ACTIVO = None
     ARCHIVO_PROD_ACTIVO = None
@@ -141,8 +136,17 @@ with st.sidebar:
         st.warning("Sin config producción")
 
 # ==========================================
-#      CARGA TRABAJADORES (DINÁMICA)
+#      CARGAS DATOS
 # ==========================================
+@st.cache_data(ttl=600)
+def cargar_vehiculos_dict():
+    sh = conectar_flexible(ID_VEHICULOS)
+    if not sh: return {}
+    try:
+        return {r[0]: (r[1] if len(r)>1 else "") for r in sh.sheet1.get_all_values() if r and r[0] and "veh" not in r[0].lower()}
+    except: return {}
+
+# --- CARGA TRABAJADORES (CORREGIDA) ---
 def cargar_trabajadores(id_roster):
     if not id_roster: return []
     sh = conectar_flexible(id_roster)
@@ -162,12 +166,13 @@ def cargar_trabajadores(id_roster):
             if len(fila) < 2: continue
             uid, nom = str(fila[0]).strip(), str(fila[1]).strip()
             if not uid or "id" in uid.lower(): continue
-            if len(fila) > col_dia and fila[col_dia]: continue # Ya fichado
+            # Filtro ya fichado
+            if len(fila) > col_dia and fila[col_dia]: continue
             
             tipo = "OBRA"
             if len(fila) > 2 and ("A" == str(fila[2]).upper() or "ALMACEN" in str(fila[2]).upper()): tipo = "ALMACEN"
             
-            lista.append({"display": f"{uid} - {nombre}", "tipo": tipo, "id": uid, "nombre_solo": nom})
+            lista.append({"display": f"{uid} - {nom}", "tipo": tipo, "id": uid, "nombre_solo": nom})
         return lista
     except: return []
 
@@ -220,6 +225,7 @@ def guardar_prod_con_nota(archivo, hoja, fila, col, valor, vehiculo):
 def generar_pdf(fecha, jefe, lista, para, prod):
     b = BytesIO()
     c = canvas.Canvas(b, pagesize=A4); _, h = A4
+    
     start_time, end_time = "________", "________"
     if lista: start_time, end_time = lista[0]['H_Inicio'], lista[0]['H_Fin']
 
@@ -302,6 +308,7 @@ t1, t2 = st.tabs(["📝 Partes de Trabajo", "🏗️ Producción"])
 
 with t1:
     st.subheader("Datos Generales")
+    
     if ID_ROSTER_ACTIVO:
         c1, c2, c3, c4, c5 = st.columns([1,1,1,2,2])
         d = c1.selectbox("Día", range(1,32), index=datetime.now().day-1)
@@ -311,27 +318,30 @@ with t1:
         
         vh = cargar_vehiculos_dict()
         ve = c4.selectbox("Vehículo / Lugar", [""]+list(vh.keys()) if vh else [""])
-        st.session_state.veh_glob = ve # Guardar para prod
+        st.session_state.veh_glob = ve 
         
         info_ve = vh.get(ve, "") if vh else ""
         c5.text_input("Detalle", value=info_ve, disabled=True)
         
         st.divider()
         fl = st.radio("Filtro", ["TODOS", "OBRA", "ALMACEN"], horizontal=True)
+        
+        # --- AQUÍ ESTÁ LA CORRECCIÓN: Pasamos el ID_ROSTER_ACTIVO ---
         trabs = cargar_trabajadores(ID_ROSTER_ACTIVO)
+        
         if fl=="ALMACEN": fil=[t for t in trabs if t['tipo']=="ALMACEN"]
         elif fl=="OBRA": fil=[t for t in trabs if t['tipo']!="ALMACEN"]
         else: fil=trabs
         
-        c_a1, c_a2, c_a3, c_a4, c_a5 = st.columns([3,1,1,1,1])
-        sel_t = c_a1.selectbox("Operario", [""]+[t['display'] for t in fil])
+        sel_t = c1.selectbox("Operario", [""]+[t['display'] for t in fil], key="sel_op")
         
-        h_ini = c_a2.time_input("Inicio", datetime.strptime("07:00", "%H:%M").time())
-        h_fin = c_a3.time_input("Fin", datetime.strptime("16:00", "%H:%M").time())
-        turno = c_a4.selectbox("Turno", ["AUT", "D", "N"])
-        comida = c_a5.checkbox("-1h Comida", value=(fl=="ALMACEN"))
+        c_a1, c_a2, c_a3, c_a4 = st.columns(4)
+        h_ini = c_a1.time_input("Inicio", datetime.strptime("07:00", "%H:%M").time())
+        h_fin = c_a2.time_input("Fin", datetime.strptime("16:00", "%H:%M").time())
+        turno = c_a3.selectbox("Turno", ["AUT", "D", "N"])
+        comida = c_a4.checkbox("-1h Comida", value=(fl=="ALMACEN"))
         
-        if st.button("➕ AÑADIR", type="secondary", use_container_width=True):
+        if st.button("Añadir"):
             if sel_t and sel_t != "":
                 t1 = datetime.combine(fe, h_ini); t2 = datetime.combine(fe, h_fin)
                 if t2 < t1: t2 += timedelta(days=1)
@@ -345,51 +355,34 @@ with t1:
         if st.session_state.lista:
             st.dataframe(pd.DataFrame(st.session_state.lista)[["ID","Nombre","Total_Horas"]], use_container_width=True)
             if st.button("Borrar Lista"): st.session_state.lista=[]
-            
-        st.divider()
-        para = st.checkbox("🛑 Paralización")
-        d_para = None
-        if para:
-            cp1, cp2, cp3 = st.columns([1,1,2])
-            pi = cp1.time_input("Ini Parada"); pf = cp2.time_input("Fin Parada"); pm = cp3.text_input("Motivo")
-            d1, d2 = datetime.combine(hoy, pi), datetime.combine(hoy, pf)
-            durp = round((d2-d1).seconds/3600, 2)
-            d_para = {"inicio": str(pi), "fin": str(pf), "duracion": durp, "motivo": pm}
-            
-        if st.button("💾 GUARDAR TODO", type="primary", use_container_width=True):
+
+        if st.button("GUARDAR PARTE", type="primary"):
             if not st.session_state.lista: st.error("Lista vacía")
             elif not ve: st.error("Falta vehículo")
             else:
                 with st.spinner("Guardando..."):
-                    ok = guardar_parte(fe, st.session_state.lista, ve, d_para, ID_ROSTER_ACTIVO)
-                    pdf = generar_pdf(str(fe.date()), ve, st.session_state.lista, d_para, st.session_state.prod)
-                    nm = f"Parte_{fe.date()}_{ve}.pdf"
-                    
-                    try:
-                        if "email" in st.secrets: 
-                            enviar_email(pdf, nm, str(fe.date()), ve)
-                            ms = "📧 Email enviado"
-                        else: ms = ""
-                    except: ms = "⚠️ Error Email"
-                    
-                    if ok:
-                        st.success(f"✅ Guardado. {ms}")
-                        st.download_button("📥 PDF", pdf, nm, "application/pdf")
-                        st.session_state.lista=[]; st.session_state.prod={}; time.sleep(3); st.rerun()
+                    ok = guardar_parte(fe, st.session_state.lista, ve, None, ID_ROSTER_ACTIVO)
+                    pdf = generar_pdf(str(fe.date()), ve, st.session_state.lista, None, st.session_state.prod)
+                    enviar_email(pdf, f"Parte_{fe.date()}.pdf", str(fe.date()), ve)
+                    st.success("Guardado"); st.session_state.lista=[]; st.session_state.prod={}; time.sleep(3); st.rerun()
 
 with t2:
-    if not st.session_state.veh_glob:
-        st.warning("⛔ Selecciona VEHÍCULO en la Pestaña 1 primero.")
-    elif not TRAMO_ACTIVO:
-        st.warning("⛔ Selecciona TRAMO en el menú lateral izquierdo.")
+    st.header("🏗️ Control de Producción")
+    veh_actual = st.session_state.veh_glob
+    tramo_actual = TRAMO_ACTIVO # Viene del sidebar
+    
+    if not veh_actual: st.warning("⛔ Elige Vehículo en Pestaña 1")
+    elif not tramo_actual: st.warning("⛔ Elige Tramo en menú lateral")
     else:
-        st.header(f"🏗️ {TRAMO_ACTIVO}")
-        hjs = obtener_hojas_track_cached(ARCHIVO_PROD_ACTIVO)
+        conf = cargar_config_prod()
+        nom = conf.get(tramo_actual)
+        hjs = obtener_hojas_track_cached(nom)
+        
         if hjs:
             hj = st.selectbox("Hoja", hjs, index=None)
             if hj:
                 with st.spinner("Cargando..."):
-                    datos_completos = cargar_datos_completos_hoja(ARCHIVO_PROD_ACTIVO, hj)
+                    datos_completos = cargar_datos_completos_hoja(nom, hj)
                 
                 if datos_completos:
                     fil = st.text_input("Filtro Km")
@@ -401,16 +394,14 @@ with t2:
                         info = datos_completos[it]
                         fr = info['fila_excel']
                         d = info['datos']
-                        
                         st.divider()
-                        st.markdown(f"### 📍 {it}")
-                        
+                        st.markdown(f"### {it}")
                         c1, c2 = st.columns([1,2])
                         ec, fc = safe_val(d, 3), safe_val(d, 5)
                         c1.info(f"Cim: {ec}")
                         if fc: c2.success(f"Hecho: {fc}")
                         elif c2.button("Grabar CIM"):
-                            guardar_prod_con_nota(ARCHIVO_PROD_ACTIVO, hj, fr, 5, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob)
+                            guardar_prod_con_nota(nom, hj, fr, 5, datetime.now().strftime("%d/%m/%Y"), veh_actual)
                             if it not in st.session_state.prod: st.session_state.prod[it]=[]
                             st.session_state.prod[it].append("CIM"); st.rerun()
                             
@@ -420,36 +411,13 @@ with t2:
                         c1.info(f"Poste: {ep}")
                         if fp: c2.success(f"Hecho: {fp}")
                         elif c2.button("Grabar POSTE"):
-                            guardar_prod_con_nota(ARCHIVO_PROD_ACTIVO, hj, fr, 8, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob)
+                            guardar_prod_con_nota(nom, hj, fr, 8, datetime.now().strftime("%d/%m/%Y"), veh_actual)
                             if it not in st.session_state.prod: st.session_state.prod[it]=[]
                             st.session_state.prod[it].append("POSTE"); st.rerun()
                             
                         st.divider()
-                        c1, c2 = st.columns([1,2])
-                        m = f"{safe_val(d,33) or ''} {safe_val(d,34) or ''}".strip()
-                        fm = safe_val(d, 38)
-                        c1.info(f"Ménsula: {m or '-'}")
-                        if fm: c2.success(f"Hecho: {fm}")
-                        elif c2.button("Grabar MENSULA"):
-                            guardar_prod_con_nota(ARCHIVO_PROD_ACTIVO, hj, fr, 38, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob)
-                            if it not in st.session_state.prod: st.session_state.prod[it]=[]
-                            st.session_state.prod[it].append("MEN"); st.rerun()
-                        
-                        st.divider(); st.write("**Anclajes**")
-                        idx_t = [18,21,24,27]; idx_f = [20,23,26,29]
-                        typs, grp_f, done = [], [], False
-                        for i in range(4):
-                            v = safe_val(d, idx_t[i])
-                            if v:
-                                typs.append(v); grp_f.append(idx_f[i])
-                                if safe_val(d, idx_f[i]): done=True
-                        c1, c2 = st.columns([1,2])
-                        c1.info(", ".join(typs) if typs else "-")
-                        if not typs: c2.write("-")
-                        elif done: c2.success("Hecho")
-                        elif c2.button("Grabar ANCLAJES"):
-                            hoy = datetime.now().strftime("%d/%m/%Y")
-                            for c in grp_f: 
-                                guardar_prod_con_nota(ARCHIVO_PROD_ACTIVO, hj, fr, c, hoy, st.session_state.veh_glob)
+                        # ANCLAJES
+                        if st.button("Grabar Anclajes"):
+                            guardar_prod_con_nota(nom, hj, fr, 20, datetime.now().strftime("%d/%m/%Y"), veh_actual)
                             if it not in st.session_state.prod: st.session_state.prod[it]=[]
                             st.session_state.prod[it].append("ANC"); st.rerun()
