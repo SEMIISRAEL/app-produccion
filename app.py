@@ -12,19 +12,20 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 
-# --- CONFIGURACIÓN DE PÁGINA ---
+# --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Gestor SEMI - Tablet", layout="wide", page_icon="🏗️")
 
-# --- IDs EXACTOS (COPIADOS DE TU DIAGNÓSTICO) ---
-# Usamos el ID porque es infalible.
+# --- IDs DE ARCHIVOS EXCEL (Ya los tenías) ---
 ID_ROSTER = "1ezFvpyTzkL98DJjpXeeGuqbMy_kTZItUC9FDkxFlD08"
 ID_VEHICULOS = "19PWpeCz8pl5NEDpK-omX5AdrLuJgOPrn6uSjtUGomY8"
 ID_CONFIG_PROD = "1uCu5pq6l1CjqXKPEkGkN-G5Z5K00qiV9kR_bGOii6FU"
 
-FOLDER_PDF_DRIVE = "PARTES_PDF"
+# --- ¡NUEVO! PEGA AQUÍ EL ID DE TU CARPETA DE PDFS ---
+# (El código raro que sale en la barra de direcciones cuando entras en la carpeta)
+ID_FOLDER_PDF = "19j73aobZKHHGQhLZ0z49nsQp-usmoaMB" 
 
 # ==========================================
-#           CONEXIÓN (Doble Sistema)
+#           CONEXIÓN GENERAL
 # ==========================================
 @st.cache_resource
 def get_gspread_client():
@@ -34,22 +35,19 @@ def get_gspread_client():
     client = gspread.authorize(creds)
     return client
 
-# 1. Conexión SEGURA por ID (Para tus archivos fijos)
 def conectar_por_id(file_id):
     client = get_gspread_client()
-    try:
-        return client.open_by_key(file_id)
-    except Exception as e:
-        return None
+    try: return client.open_by_key(file_id)
+    except: return None
 
-# 2. Conexión por NOMBRE (Para los archivos de producción que cambian)
 def conectar_por_nombre(nombre_archivo):
     client = get_gspread_client()
-    try:
-        return client.open(nombre_archivo)
-    except Exception as e:
-        return None
+    try: return client.open(nombre_archivo)
+    except: return None
 
+# ==========================================
+#      SUBIDA A DRIVE (POR ID EXACTO)
+# ==========================================
 def subir_pdf_a_drive(pdf_buffer, nombre_archivo):
     try:
         creds_dict = dict(st.secrets["gcp_service_account"])
@@ -57,31 +55,26 @@ def subir_pdf_a_drive(pdf_buffer, nombre_archivo):
         creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
         service = build('drive', 'v3', credentials=creds)
         
-        query = f"mimeType='application/vnd.google-apps.folder' and name='{FOLDER_PDF_DRIVE}' and trashed=false"
-        results = service.files().list(q=query, fields="files(id)").execute()
-        items = results.get('files', [])
-        
-        if not items:
-            metadata = {'name': FOLDER_PDF_DRIVE, 'mimeType': 'application/vnd.google-apps.folder'}
-            folder = service.files().create(body=metadata, fields='id').execute()
-            folder_id = folder.get('id')
-        else:
-            folder_id = items[0]['id']
-            
-        file_metadata = {'name': nombre_archivo, 'parents': [folder_id]}
+        # Subimos directamente a la carpeta por su ID (Sin buscar, tiro fijo)
+        file_metadata = {
+            'name': nombre_archivo, 
+            'parents': [ID_FOLDER_PDF] 
+        }
         media = MediaIoBaseUpload(pdf_buffer, mimetype='application/pdf', resumable=True)
-        service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+        
+        archivo = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+        print(f"Subido con ID: {archivo.get('id')}")
         return True
-    except: return False
+        
+    except Exception as e:
+        st.error(f"Error subiendo a Drive: {e}")
+        return False
 
 # ==========================================
-#        LÓGICA DE CARGA DE DATOS
+#      CARGA DE DATOS (CON CACHÉ)
 # ==========================================
-
-# Usamos caché (10 min) para velocidad
 @st.cache_data(ttl=600)
 def cargar_vehiculos_dict():
-    # ¡AQUÍ ESTABA EL FALLO! Ahora forzamos la conexión por ID
     sh = conectar_por_id(ID_VEHICULOS)
     if not sh: return {}
     try:
@@ -91,15 +84,11 @@ def cargar_vehiculos_dict():
         for fila in datos:
             if not fila: continue
             nombre = str(fila[0]).strip()
-            # Filtros de limpieza
             if not nombre or nombre.lower() in ["nombre", "vehiculo", "vehicle", "nan"]: continue
-            
             info = str(fila[1]).strip() if len(fila) > 1 else ""
             diccionario[nombre] = info
         return diccionario
-    except Exception as e:
-        # Si falla, devolvemos diccionario vacío pero no rompemos la app
-        return {}
+    except: return {}
 
 @st.cache_data(ttl=600)
 def cargar_trabajadores():
@@ -108,28 +97,18 @@ def cargar_trabajadores():
     try:
         try: ws = sh.worksheet("Roster")
         except: ws = sh.sheet1
-            
         datos = ws.get_all_values()
         lista_trabajadores = []
-        
         for fila in datos[8:]:
             if len(fila) < 2: continue
             uid = str(fila[0]).strip()
             nombre = str(fila[1]).strip()
-            
             tipo = "OBRA"
             if len(fila) > 2:
                 marca = str(fila[2]).strip().upper()
-                if marca == "A" or "ALMACEN" in marca:
-                    tipo = "ALMACEN"
-            
+                if marca == "A" or "ALMACEN" in marca: tipo = "ALMACEN"
             if uid and nombre and uid.lower() != "id":
-                lista_trabajadores.append({
-                    "display": f"{uid} - {nombre}",
-                    "tipo": tipo,
-                    "id": uid,
-                    "nombre_solo": nombre
-                })
+                lista_trabajadores.append({"display": f"{uid} - {nombre}", "tipo": tipo, "id": uid, "nombre_solo": nombre})
         return lista_trabajadores
     except: return []
 
@@ -141,8 +120,7 @@ def cargar_config_prod():
         datos = sh.sheet1.get_all_values()
         config = {}
         for row in datos:
-            if len(row) >= 2 and row[0] and row[1]:
-                config[row[0].strip()] = row[1].strip()
+            if len(row) >= 2 and row[0] and row[1]: config[row[0].strip()] = row[1].strip()
         return config
     except: return {}
 
@@ -150,34 +128,29 @@ def buscar_columna_dia(ws, dia_num):
     header_rows = ws.get_values("E4:AX9") 
     for r_idx, row in enumerate(header_rows):
         for c_idx, val in enumerate(row):
-            if val and (str(val).strip() == str(dia_num)):
-                return c_idx + 5 
+            if val and (str(val).strip() == str(dia_num)): return c_idx + 5 
     dias_dif = int(dia_num) - 21
     if dias_dif < 0: dias_dif += 30
     return 14 + (dias_dif * 2)
 
 # ==========================================
-#          LÓGICA DE GUARDADO
+#          GUARDADO DE DATOS
 # ==========================================
-
 def guardar_parte_en_nube(fecha_dt, lista_trabajadores, vehiculo, datos_paralizacion):
     sh = conectar_por_id(ID_ROSTER)
     if not sh: return False
     try:
         try: ws = sh.worksheet("Roster")
         except: ws = sh.sheet1
-        
         col_dia = buscar_columna_dia(ws, fecha_dt.day)
         col_ids = ws.col_values(1)
         cells_to_update = []
-        
         for t in lista_trabajadores:
             try:
                 fila = col_ids.index(t['ID']) + 1 
                 cells_to_update.append(gspread.Cell(fila, col_dia, t['Turno_Letra']))
                 cells_to_update.append(gspread.Cell(fila, col_dia + 1, t['Total_Horas']))
             except: pass
-                
         if cells_to_update: ws.update_cells(cells_to_update)
 
         if datos_paralizacion:
@@ -185,18 +158,13 @@ def guardar_parte_en_nube(fecha_dt, lista_trabajadores, vehiculo, datos_paraliza
             except: 
                 ws_para = sh.add_worksheet("Paralizaciones", 1000, 10)
                 ws_para.append_row(["Fecha", "Vehiculo/Lugar", "Inicio", "Fin", "Horas", "Motivo"])
-            
-            ws_para.append_row([
-                str(fecha_dt.date()), vehiculo, datos_paralizacion['inicio'], 
-                datos_paralizacion['fin'], datos_paralizacion['duracion'], datos_paralizacion['motivo']
-            ])
+            ws_para.append_row([str(fecha_dt.date()), vehiculo, datos_paralizacion['inicio'], datos_paralizacion['fin'], datos_paralizacion['duracion'], datos_paralizacion['motivo']])
         return True
     except Exception as e:
         st.error(f"Error al guardar: {e}")
         return False
 
 def guardar_produccion(archivo_prod, hoja_prod, fila, col, valor):
-    # Aquí seguimos usando nombre porque viene del Excel de config
     sh = conectar_por_nombre(archivo_prod)
     if not sh: return False
     try:
@@ -204,7 +172,7 @@ def guardar_produccion(archivo_prod, hoja_prod, fila, col, valor):
         ws.update_cell(fila, col, valor)
         return True
     except Exception as e:
-        st.error(f"Error guardando producción: {e}")
+        st.error(f"Error: {e}")
         return False
 
 # ==========================================
@@ -252,7 +220,6 @@ def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
 # ==========================================
 #           INTERFAZ DE USUARIO
 # ==========================================
-
 if 'lista_sel' not in st.session_state: st.session_state.lista_sel = []
 if 'prod_dia' not in st.session_state: st.session_state.prod_dia = {}
 
@@ -271,9 +238,7 @@ with tab1:
     except: fecha_sel = hoy; st.error("Fecha incorrecta")
 
     dicc_vehiculos = cargar_vehiculos_dict()
-    
     if dicc_vehiculos:
-        # Añadimos espacio en blanco
         nombres_veh = [""] + list(dicc_vehiculos.keys())
         vehiculo_sel = c_veh.selectbox("Vehículo / Lugar", nombres_veh)
         info_extra = dicc_vehiculos.get(vehiculo_sel, "")
@@ -283,12 +248,9 @@ with tab1:
         c_info.text_input("Detalle", disabled=True)
         
     st.divider()
-    
     st.write("**Filtrar Personal:**")
     filtro = st.radio("Filtro", ["TODOS", "OBRA", "ALMACEN"], horizontal=True, label_visibility="collapsed")
-    
     c_add1, c_add2, c_add3, c_add4, c_add5 = st.columns([3, 1, 1, 1, 1])
-    
     todos_trabajadores = cargar_trabajadores()
     
     if filtro == "ALMACEN":
@@ -301,18 +263,11 @@ with tab1:
         filtrados = todos_trabajadores
         default_comida = False
         
-    if not filtrados:
-        opciones_nombres = ["Sin resultados"]
-    else:
-        # Espacio en blanco al inicio
-        opciones_nombres = [""] + [t['display'] for t in filtrados]
-        
+    opciones_nombres = [""] + [t['display'] for t in filtrados] if filtrados else ["Sin resultados"]
     trabajador_sel = c_add1.selectbox("Seleccionar Operario", opciones_nombres)
     
-    h_ini_def = datetime.strptime("07:00", "%H:%M").time()
-    h_fin_def = datetime.strptime("16:00", "%H:%M").time()
-    h_ini = c_add2.time_input("Inicio", h_ini_def)
-    h_fin = c_add3.time_input("Fin", h_fin_def)
+    h_ini = c_add2.time_input("Inicio", datetime.strptime("07:00", "%H:%M").time())
+    h_fin = c_add3.time_input("Fin", datetime.strptime("16:00", "%H:%M").time())
     turno_manual = c_add4.selectbox("Turno", ["AUT", "D", "N"])
     desc_comida = c_add5.checkbox("-1h Comida", value=default_comida)
     
@@ -325,19 +280,20 @@ with tab1:
             
             es_noche = False
             t_letra = "D"
-            if turno_manual == "N" or (turno_manual=="AUT" and (h_ini.hour>=21 or h_ini.hour<=4)):
-                es_noche, t_letra = True, "N"
+            
+            cond_manual_noche = (turno_manual == "N")
+            cond_auto_noche = False
+            if turno_manual == "AUT" and (h_ini.hour >= 21 or h_ini.hour <= 4): cond_auto_noche = True
+            if cond_manual_noche or cond_auto_noche: es_noche, t_letra = True, "N"
             
             if desc_comida: horas = max(0, horas - 1)
-            
             parts = trabajador_sel.split(" - ", 1)
             st.session_state.lista_sel.append({
                 "ID": parts[0], "Nombre": parts[1] if len(parts)>1 else parts[0], 
                 "H_Inicio": h_ini.strftime("%H:%M"), "H_Fin": h_fin.strftime("%H:%M"),
                 "Total_Horas": round(horas, 2), "Turno_Letra": t_letra, "Es_Noche": es_noche
             })
-        else:
-            st.warning("Selecciona un operario.")
+        else: st.warning("Selecciona un operario.")
 
     if st.session_state.lista_sel:
         st.markdown("### 📋 Cuadrilla del Día")
@@ -346,7 +302,6 @@ with tab1:
         if st.button("🗑️ Borrar lista"): st.session_state.lista_sel = []; st.rerun()
 
     st.divider()
-    
     tiene_para = st.checkbox("🛑 Registrar Paralización")
     d_para = None
     if tiene_para:
@@ -361,16 +316,15 @@ with tab1:
     if st.button("💾 GUARDAR TODO (Drive y PDF)", type="primary", use_container_width=True):
         if not st.session_state.lista_sel: st.error("Lista vacía.")
         elif not vehiculo_sel: st.error("Falta seleccionar vehículo.")
+        elif ID_FOLDER_PDF == "PON_AQUI_EL_ID_QUE_COPIASTE_DEL_NAVEGADOR": st.error("⚠️ FALTAL EL ID DE LA CARPETA EN EL CÓDIGO.")
         else:
             with st.spinner("Conectando con Google Drive..."):
                 ok_datos = guardar_parte_en_nube(fecha_sel, st.session_state.lista_sel, vehiculo_sel, d_para)
-                
                 pdf_bytes = generar_pdf_bytes(str(fecha_sel.date()), vehiculo_sel, st.session_state.lista_sel, d_para, st.session_state.prod_dia)
                 nombre_pdf = f"Parte_{fecha_sel.strftime('%Y-%m-%d')}_{vehiculo_sel}.pdf"
                 ok_pdf = subir_pdf_a_drive(pdf_bytes, nombre_pdf)
-                
                 if ok_datos and ok_pdf:
-                    st.success(f"✅ ¡Éxito! PDF guardado en 'PARTES_PDF'.")
+                    st.success(f"✅ ¡Éxito! PDF guardado en la carpeta de Drive.")
                     st.download_button("📥 Descargar Copia", pdf_bytes, nombre_pdf, "application/pdf")
                     st.session_state.lista_sel = []; st.session_state.prod_dia = {}; time.sleep(3); st.rerun()
 
@@ -378,7 +332,7 @@ with tab1:
 with tab2:
     st.header("🏗️ Control de Producción")
     config_prod = cargar_config_prod()
-    if not config_prod: st.warning("Configuración no encontrada en Drive.")
+    if not config_prod: st.warning("Configuración no encontrada.")
     else:
         tramo_sel = st.selectbox("Seleccionar Tramo", list(config_prod.keys()))
         archivo_prod = config_prod.get(tramo_sel)
@@ -394,12 +348,9 @@ with tab2:
                     filtro_km = st.text_input("🔍 Filtro Rápido (Km):")
                     if filtro_km: items = [i for i in items if filtro_km in i]
                     item_sel = st.selectbox("Elemento", items)
-                    
                     if item_sel:
                         fila = col_a.index(item_sel) + 1
                         st.markdown(f"### {item_sel}")
-                        
-                        # Cimentación
                         c1, c2 = st.columns(2)
                         ec, fc = ws_prod.cell(fila, 3).value, ws_prod.cell(fila, 5).value
                         c1.metric("Cimentación", str(ec) if ec else "---")
@@ -409,10 +360,7 @@ with tab2:
                             if item_sel not in st.session_state.prod_dia: st.session_state.prod_dia[item_sel] = []
                             st.session_state.prod_dia[item_sel].append("CIM")
                             st.rerun()
-                        
                         st.divider()
-                        
-                        # Poste
                         c1, c2 = st.columns(2)
                         ep, fp = ws_prod.cell(fila, 6).value, ws_prod.cell(fila, 8).value
                         c1.metric("Poste", str(ep) if ep else "---")
@@ -422,4 +370,5 @@ with tab2:
                             if item_sel not in st.session_state.prod_dia: st.session_state.prod_dia[item_sel] = []
                             st.session_state.prod_dia[item_sel].append("POSTE")
                             st.rerun()
+
 
