@@ -17,16 +17,16 @@ from email.mime.base import MIMEBase
 from email.mime.text import MIMEText
 from email import encoders
 
-# --- CONFIGURACIÓN DE PÁGINA ---
+# --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Gestor SEMI - Tablet", layout="wide", page_icon="🏗️")
 
-# --- IDs FIJOS ---
+# --- IDs ---
 ID_ROSTER = "1ezFvpyTzkL98DJjpXeeGuqbMy_kTZItUC9FDkxFlD08"
 ID_VEHICULOS = "19PWpeCz8pl5NEDpK-omX5AdrLuJgOPrn6uSjtUGomY8"
 ID_CONFIG_PROD = "1uCu5pq6l1CjqXKPEkGkN-G5Z5K00qiV9kR_bGOii6FU"
 
 # ==========================================
-#           SISTEMA DE LOGIN
+#           LOGIN
 # ==========================================
 def check_login():
     if 'logged_in' not in st.session_state:
@@ -49,15 +49,15 @@ def check_login():
                         st.session_state.user_name = usuario
                         st.session_state.user_role = roles_db.get(usuario, "invitado")
                         st.rerun()
-                    else: st.error("❌ Datos incorrectos")
-                except: st.error("⚠️ Error en Secrets.")
+                    else: st.error("❌ Incorrecto")
+                except: st.error("⚠️ Error Secrets")
         return False
     return True
 
 if not check_login(): st.stop()
 
 # ==========================================
-#      SIDEBAR (CONFIGURACIÓN)
+#      SIDEBAR
 # ==========================================
 @st.cache_data(ttl=300)
 def buscar_archivos_roster():
@@ -68,12 +68,11 @@ def buscar_archivos_roster():
         service = build('drive', 'v3', credentials=creds)
         query = "name contains 'Roster' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false"
         results = service.files().list(q=query, fields="files(id, name)", orderBy="name desc").execute()
-        items = results.get('files', [])
-        return {f['name']: f['id'] for f in items}
+        return {f['name']: f['id'] for f in results.get('files', [])}
     except: return {}
 
 with st.sidebar:
-    st.write(f"👤 **{st.session_state.user_name.upper()}** ({st.session_state.user_role})")
+    st.write(f"👤 **{st.session_state.user_name.upper()}**")
     if st.button("Cerrar Sesión"):
         st.session_state.logged_in = False
         st.rerun()
@@ -108,32 +107,45 @@ def conectar_por_id(file_id):
     try: return client.open_by_key(file_id)
     except: return None
 
-# ESTA FUNCIÓN NO TIENE CACHÉ PARA PODER REINTENTAR SIEMPRE
-def conectar_por_nombre_raw(nombre_archivo):
+def conectar_por_nombre(nombre_archivo):
     client = get_gspread_client()
     try:
         return client.open(nombre_archivo)
     except:
-        # Intento inteligente: si falla, prueba añadiendo o quitando .xlsx
         try:
-            if ".xlsx" in nombre_archivo:
-                return client.open(nombre_archivo.replace(".xlsx", "").strip())
-            else:
-                return client.open(nombre_archivo + ".xlsx")
-        except:
-            return None
+            if ".xlsx" in nombre_archivo: return client.open(nombre_archivo.replace(".xlsx", "").strip())
+            else: return client.open(nombre_archivo + ".xlsx")
+        except: return None
 
-# ESTA SÍ TIENE CACHÉ PARA LA LISTA DE HOJAS (SOLUCIÓN AL ERROR 429)
-@st.cache_data(ttl=600, show_spinner=False)
+# --- CACHÉ PARA PESTAÑAS ---
+@st.cache_data(ttl=600)
 def obtener_hojas_track_cached(nombre_archivo):
-    sh = conectar_por_nombre_raw(nombre_archivo)
+    sh = conectar_por_nombre(nombre_archivo)
     if not sh: return None
     try:
         return [ws.title for ws in sh.worksheets() if "HR TRACK" in ws.title.upper()]
     except: return []
 
+# --- NUEVO: CACHÉ PARA ITEMS (SOLUCIONA EL ERROR 429) ---
+@st.cache_data(ttl=600)
+def obtener_items_produccion(nombre_archivo, nombre_hoja):
+    try:
+        sh = conectar_por_nombre(nombre_archivo)
+        ws = sh.worksheet(nombre_hoja)
+        # Leemos solo columna A
+        col_a = ws.col_values(1)
+        # Filtramos basura
+        return [x for x in col_a if x and len(x)>2 and "ITEM" not in x.upper() and "HR TRACK" not in x.upper()]
+    except Exception:
+        # Reintento simple si falla
+        time.sleep(1)
+        try:
+            sh = conectar_por_nombre(nombre_archivo)
+            return sh.worksheet(nombre_hoja).col_values(1)
+        except: return []
+
 # ==========================================
-#      EMAIL & CARGA DE DATOS
+#      EMAIL
 # ==========================================
 def enviar_email_pdf(pdf_buffer, nombre_archivo, fecha_str, jefe):
     try:
@@ -254,7 +266,7 @@ def guardar_parte_en_nube(fecha_dt, lista_trabajadores, vehiculo, datos_paraliza
     except: return False
 
 def guardar_produccion(archivo_prod, hoja_prod, fila, col, valor):
-    sh = conectar_por_nombre_raw(archivo_prod)
+    sh = conectar_por_nombre(archivo_prod)
     if not sh: return False
     try:
         ws = sh.worksheet(hoja_prod)
@@ -263,16 +275,14 @@ def guardar_produccion(archivo_prod, hoja_prod, fila, col, valor):
     except: return False
 
 # ==========================================
-#      GENERADOR PDF (DISEÑO PROFESIONAL)
+#          PDF GENERATOR
 # ==========================================
 def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
     buffer = BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
     _, height = A4
     start_time, end_time = "________", "________"
-    if trabajadores:
-        start_time = trabajadores[0]['H_Inicio']
-        end_time = trabajadores[0]['H_Fin']
+    if trabajadores: start_time, end_time = trabajadores[0]['H_Inicio'], trabajadores[0]['H_Fin']
 
     y = height - 90
     c.setLineWidth(1); c.rect(40, y - 60, 515, 70) 
@@ -335,14 +345,13 @@ def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
     c.save(); buffer.seek(0); return buffer
 
 # ==========================================
-#           INTERFAZ DE USUARIO
+#           INTERFAZ
 # ==========================================
 if 'lista_sel' not in st.session_state: st.session_state.lista_sel = []
 if 'prod_dia' not in st.session_state: st.session_state.prod_dia = {}
 
 tab1, tab2 = st.tabs(["📝 Partes de Trabajo", "🏗️ Producción"])
 
-# ---------------- PESTAÑA 1 ----------------
 with tab1:
     if not ID_ROSTER_ACTIVO: st.warning("⚠️ No hay archivo Roster.")
     else:
@@ -353,18 +362,13 @@ with tab1:
         mes = c2.selectbox("Mes", range(1,13), index=hoy.month-1)
         ano = c3.selectbox("Año", [2024, 2025, 2026], index=1)
         try: fecha_sel = datetime(ano, mes, dia)
-        except: fecha_sel = hoy; st.error("Fecha incorrecta")
-
-        dicc_vehiculos = cargar_vehiculos_dict()
-        if dicc_vehiculos:
-            nombres_veh = [""] + list(dicc_vehiculos.keys())
-            vehiculo_sel = c4.selectbox("Vehículo / Lugar", nombres_veh)
-            info_extra = dicc_vehiculos.get(vehiculo_sel, "")
-            c5.text_input("Detalle", value=info_extra, disabled=True)
-        else:
-            vehiculo_sel = c4.selectbox("Vehículo / Lugar", ["Error Carga"])
-            c5.text_input("Detalle", disabled=True)
-            
+        except: fecha_sel = hoy
+        
+        dv = cargar_vehiculos_dict()
+        nv = [""] + list(dv.keys()) if dv else ["Error"]
+        veh_sel = c4.selectbox("Vehículo/Lugar", nv)
+        c5.text_input("Detalle", value=dv.get(veh_sel, "") if dv else "", disabled=True)
+        
         st.divider()
         filtro = st.radio("Filtro:", ["TODOS", "OBRA", "ALMACEN"], horizontal=True)
         c_a1, c_a2, c_a3, c_a4, c_a5 = st.columns([3,1,1,1,1])
@@ -446,84 +450,92 @@ with tab2:
             nom_arch = conf.get(tr)
             st.info(f"📂 Archivo: {nom_arch}")
             
-            # --- ZONA OPTIMIZADA CON CACHÉ ---
+            # --- PROTECCIÓN: Leemos lista de hojas con caché ---
             hjs = obtener_hojas_track_cached(nom_arch)
             
             if hjs is None:
-                st.error(f"❌ Error: No puedo conectar con '{nom_arch}'.")
+                st.error(f"❌ Error CRÍTICO: No puedo conectar con '{nom_arch}'.")
+                st.write("👉 Revisa que el nombre en el Excel de config coincida EXACTO con el de Drive.")
             elif not hjs:
                 st.warning("⚠️ El archivo no tiene pestañas 'HR TRACK'.")
             else:
                 hj = st.selectbox("2️⃣ Hoja", hjs, index=None, placeholder="Elige Hoja...")
                 if hj:
-                    sh = conectar_por_nombre_raw(nom_arch)
-                    ws = sh.worksheet(hj)
-                    col_a = ws.col_values(1)
-                    items = [x for x in col_a if x and len(x)>2 and "ITEM" not in x and "HR TRACK" not in x]
+                    # AQUÍ SÍ LEEMOS LOS ITEMS (También con caché)
+                    items_validos = obtener_items_produccion(nom_arch, hj)
                     
                     fil = st.text_input("🔍 Filtro Km (ej: 52)")
-                    if fil: items = [i for i in items if fil in i]
-                    it = st.selectbox("3️⃣ Elemento", items)
+                    if fil: items_validos = [i for i in items_validos if fil in str(i)]
+                    
+                    it = st.selectbox("3️⃣ Elemento", items_validos)
                     
                     if it:
-                        r = col_a.index(it)+1
-                        st.divider()
-                        st.markdown(f"### 📍 {it}")
-                        
-                        # CIMENTACIÓN
-                        c1, c2 = st.columns([1, 2])
-                        ec, fc = ws.cell(r, 3).value, ws.cell(r, 5).value
-                        c1.info(f"Cim: {ec or '-'}")
-                        if fc: c2.success(f"Hecho: {fc}")
-                        elif c2.button("Grabar CIM", key="b_cim"):
-                            guardar_produccion(nom_arch, hj, r, 5, datetime.now().strftime("%d/%m/%Y"))
-                            if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
-                            st.session_state.prod_dia[it].append("CIM"); st.rerun()
+                        # Si seleccionamos, necesitamos escribir (aquí conectamos sin caché)
+                        sh_write = conectar_por_nombre(nom_arch)
+                        if sh_write:
+                            ws = sh_write.worksheet(hj)
+                            # Buscamos la fila sin caché (para asegurarnos de la posición real)
+                            # Esto es una lectura rápida de col A
+                            col_a = ws.col_values(1)
+                            r = col_a.index(it)+1
                             
-                        st.divider()
-                        
-                        # POSTE
-                        c1, c2 = st.columns([1, 2])
-                        ep, fp = ws.cell(r, 6).value, ws.cell(r, 8).value
-                        c1.info(f"Poste: {ep or '-'}")
-                        if fp: c2.success(f"Hecho: {fp}")
-                        elif c2.button("Grabar POSTE", key="b_pos"):
-                            guardar_produccion(nom_arch, hj, r, 8, datetime.now().strftime("%d/%m/%Y"))
-                            if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
-                            st.session_state.prod_dia[it].append("POSTE"); st.rerun()
+                            st.divider()
+                            st.markdown(f"### 📍 {it}")
                             
-                        st.divider()
-                        
-                        # MENSULA
-                        c1, c2 = st.columns([1, 2])
-                        m_desc = f"{ws.cell(r,33).value or ''} {ws.cell(r,34).value or ''}".strip()
-                        fm = ws.cell(r, 38).value
-                        c1.info(f"Ménsula: {m_desc or '-'}")
-                        if fm: c2.success(f"Hecho: {fm}")
-                        elif c2.button("Grabar MENSULA", key="b_men"):
-                            guardar_produccion(nom_arch, hj, r, 38, datetime.now().strftime("%d/%m/%Y"))
-                            if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
-                            st.session_state.prod_dia[it].append("MENSULA"); st.rerun()
+                            # CIMENTACIÓN
+                            c1, c2 = st.columns([1, 2])
+                            ec, fc = ws.cell(r, 3).value, ws.cell(r, 5).value
+                            c1.info(f"Cim: {ec or '-'}")
+                            if fc: c2.success(f"Hecho: {fc}")
+                            elif c2.button("Grabar CIM", key="b_cim"):
+                                guardar_produccion(nom_arch, hj, r, 5, datetime.now().strftime("%d/%m/%Y"))
+                                if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
+                                st.session_state.prod_dia[it].append("CIM"); st.rerun()
+                                
+                            st.divider()
                             
-                        st.divider()
-                        
-                        # ANCLAJES
-                        st.write("**Anclajes:**")
-                        cols_t, cols_f = [18, 21, 24, 27], [20, 23, 26, 29]
-                        typs, idxs, done = [], [], False
-                        for i in range(4):
-                            v = ws.cell(r, cols_t[i]).value
-                            if v:
-                                typs.append(str(v)); idxs.append(i)
-                                if ws.cell(r, cols_f[i]).value: done = True
-                        
-                        c1, c2 = st.columns([1, 2])
-                        c1.info(f"Tipos: {', '.join(typs) if typs else 'Ninguno'}")
-                        
-                        if not typs: c2.write("-")
-                        elif done: c2.success("✅ Ya registrados")
-                        elif c2.button("Grabar ANCLAJES", key="b_anc"):
-                            hoy = datetime.now().strftime("%d/%m/%Y")
-                            for i in idxs: guardar_produccion(nom_arch, hj, r, cols_f[i], hoy)
-                            if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
-                            st.session_state.prod_dia[it].append("ANCLAJES"); st.rerun()
+                            # POSTE
+                            c1, c2 = st.columns([1, 2])
+                            ep, fp = ws.cell(r, 6).value, ws.cell(r, 8).value
+                            c1.info(f"Poste: {ep or '-'}")
+                            if fp: c2.success(f"Hecho: {fp}")
+                            elif c2.button("Grabar POSTE", key="b_pos"):
+                                guardar_produccion(nom_arch, hj, r, 8, datetime.now().strftime("%d/%m/%Y"))
+                                if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
+                                st.session_state.prod_dia[it].append("POSTE"); st.rerun()
+                                
+                            st.divider()
+                            
+                            # MENSULA
+                            c1, c2 = st.columns([1, 2])
+                            m_desc = f"{ws.cell(r,33).value or ''} {ws.cell(r,34).value or ''}".strip()
+                            fm = ws.cell(r, 38).value
+                            c1.info(f"Ménsula: {m_desc or '-'}")
+                            if fm: c2.success(f"Hecho: {fm}")
+                            elif c2.button("Grabar MENSULA", key="b_men"):
+                                guardar_produccion(nom_arch, hj, r, 38, datetime.now().strftime("%d/%m/%Y"))
+                                if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
+                                st.session_state.prod_dia[it].append("MENSULA"); st.rerun()
+                                
+                            st.divider()
+                            
+                            # ANCLAJES
+                            st.write("**Anclajes:**")
+                            cols_t, cols_f = [18, 21, 24, 27], [20, 23, 26, 29]
+                            typs, idxs, done = [], [], False
+                            for i in range(4):
+                                v = ws.cell(r, cols_t[i]).value
+                                if v:
+                                    typs.append(str(v)); idxs.append(i)
+                                    if ws.cell(r, cols_f[i]).value: done = True
+                            
+                            c1, c2 = st.columns([1, 2])
+                            c1.info(f"Tipos: {', '.join(typs) if typs else 'Ninguno'}")
+                            
+                            if not typs: c2.write("-")
+                            elif done: c2.success("✅ Ya registrados")
+                            elif c2.button("Grabar ANCLAJES", key="b_anc"):
+                                hoy = datetime.now().strftime("%d/%m/%Y")
+                                for i in idxs: guardar_produccion(nom_arch, hj, r, cols_f[i], hoy)
+                                if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
+                                st.session_state.prod_dia[it].append("ANCLAJES"); st.rerun()
