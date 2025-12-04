@@ -126,23 +126,35 @@ def obtener_hojas_track_cached(nombre_archivo):
         return [ws.title for ws in sh.worksheets() if "HR TRACK" in ws.title.upper()]
     except: return []
 
-# --- NUEVO: CACHÉ PARA ITEMS (SOLUCIONA EL ERROR 429) ---
+# --- NUEVO: MAPA DE ITEMS CACHEADO (SOLUCIÓN DEFINITIVA) ---
+# Devuelve un diccionario: { "NombrePoste": NumeroFila, ... }
 @st.cache_data(ttl=600)
-def obtener_items_produccion(nombre_archivo, nombre_hoja):
+def obtener_mapa_items(nombre_archivo, nombre_hoja):
     try:
         sh = conectar_por_nombre(nombre_archivo)
         ws = sh.worksheet(nombre_hoja)
-        # Leemos solo columna A
+        # Leemos solo columna A una vez
         col_a = ws.col_values(1)
-        # Filtramos basura
-        return [x for x in col_a if x and len(x)>2 and "ITEM" not in x.upper() and "HR TRACK" not in x.upper()]
+        
+        mapa = {}
+        for i, val in enumerate(col_a):
+            # Filtramos basura
+            if val and len(val)>2 and "ITEM" not in val.upper() and "HR TRACK" not in val.upper():
+                # Guardamos Nombre -> Fila (i+1 porque gspread es base-1)
+                mapa[val] = i + 1
+        return mapa
     except Exception:
-        # Reintento simple si falla
-        time.sleep(1)
+        # Reintento simple
+        time.sleep(2)
         try:
             sh = conectar_por_nombre(nombre_archivo)
-            return sh.worksheet(nombre_hoja).col_values(1)
-        except: return []
+            col_a = sh.worksheet(nombre_hoja).col_values(1)
+            mapa = {}
+            for i, val in enumerate(col_a):
+                if val and len(val)>2 and "ITEM" not in val.upper():
+                    mapa[val] = i + 1
+            return mapa
+        except: return {}
 
 # ==========================================
 #      EMAIL
@@ -345,7 +357,7 @@ def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
     c.save(); buffer.seek(0); return buffer
 
 # ==========================================
-#           INTERFAZ
+#           INTERFAZ DE USUARIO
 # ==========================================
 if 'lista_sel' not in st.session_state: st.session_state.lista_sel = []
 if 'prod_dia' not in st.session_state: st.session_state.prod_dia = {}
@@ -460,8 +472,10 @@ with tab2:
             else:
                 hj = st.selectbox("2️⃣ Hoja", hjs, index=None, placeholder="Elige Hoja...")
                 if hj:
-                    # --- AQUÍ USAMOS LA NUEVA FUNCIÓN CON CACHÉ ---
-                    items_validos = obtener_items_produccion(nom_arch, hj)
+                    # --- AQUÍ USAMOS EL MAPA CACHEADO (ADIÓS ERROR 429) ---
+                    # Obtenemos {Nombre: Fila}
+                    mapa_items = obtener_mapa_items(nom_arch, hj)
+                    items_validos = list(mapa_items.keys())
                     
                     fil = st.text_input("🔍 Filtro Km (ej: 52)")
                     if fil: items_validos = [i for i in items_validos if fil in str(i)]
@@ -469,13 +483,14 @@ with tab2:
                     it = st.selectbox("3️⃣ Elemento", items_validos)
                     
                     if it:
-                        # Si seleccionamos, necesitamos escribir (aquí conectamos sin caché)
-                        sh_write = conectar_por_nombre(nom_arch)
-                        if sh_write:
-                            ws = sh_write.worksheet(hj)
-                            # Buscamos la fila sin caché
-                            col_a = ws.col_values(1)
-                            r = col_a.index(it)+1
+                        # Recuperamos la fila de memoria (sin leer Excel)
+                        r = mapa_items[it] 
+                        
+                        # Ahora sí, leemos esa fila específica para ver el estado actual
+                        # Para leer una fila sola NO hace falta cargar toda la hoja
+                        sh_conn = conectar_por_nombre(nom_arch)
+                        if sh_conn:
+                            ws = sh_conn.worksheet(hj)
                             
                             st.divider()
                             st.markdown(f"### 📍 {it}")
