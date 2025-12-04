@@ -15,16 +15,16 @@ from reportlab.lib import colors
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Gestor SEMI - Tablet", layout="wide", page_icon="🏗️")
 
-# --- IDs EXACTOS (PLAN B: USAR IDs SIEMPRE ES MEJOR) ---
-# Si te vuelve a fallar la conexión, usa los IDs del diagnóstico.
-# Por ahora mantenemos nombres si te funcionaban, pero el código está preparado.
-FILE_ROSTER = "Roster 2025 12 (empty)"
-FILE_VEHICULOS = "Vehiculos 2"
-FILE_CONFIG_PROD = "ARCHIVOS DE PRODUCION"
+# --- IDs EXACTOS (COPIADOS DE TU DIAGNÓSTICO) ---
+# Usamos el ID porque es infalible.
+ID_ROSTER = "1ezFvpyTzkL98DJjpXeeGuqbMy_kTZItUC9FDkxFlD08"
+ID_VEHICULOS = "19PWpeCz8pl5NEDpK-omX5AdrLuJgOPrn6uSjtUGomY8"
+ID_CONFIG_PROD = "1uCu5pq6l1CjqXKPEkGkN-G5Z5K00qiV9kR_bGOii6FU"
+
 FOLDER_PDF_DRIVE = "PARTES_PDF"
 
 # ==========================================
-#           CONEXIÓN (CON CACHÉ)
+#           CONEXIÓN (Doble Sistema)
 # ==========================================
 @st.cache_resource
 def get_gspread_client():
@@ -34,12 +34,20 @@ def get_gspread_client():
     client = gspread.authorize(creds)
     return client
 
-def conectar_hoja(nombre_archivo):
+# 1. Conexión SEGURA por ID (Para tus archivos fijos)
+def conectar_por_id(file_id):
+    client = get_gspread_client()
+    try:
+        return client.open_by_key(file_id)
+    except Exception as e:
+        return None
+
+# 2. Conexión por NOMBRE (Para los archivos de producción que cambian)
+def conectar_por_nombre(nombre_archivo):
     client = get_gspread_client()
     try:
         return client.open(nombre_archivo)
     except Exception as e:
-        # Intento de fallback por si el nombre falla
         return None
 
 def subir_pdf_a_drive(pdf_buffer, nombre_archivo):
@@ -67,12 +75,14 @@ def subir_pdf_a_drive(pdf_buffer, nombre_archivo):
     except: return False
 
 # ==========================================
-#    LÓGICA DE CARGA DE DATOS
+#        LÓGICA DE CARGA DE DATOS
 # ==========================================
 
+# Usamos caché (10 min) para velocidad
 @st.cache_data(ttl=600)
 def cargar_vehiculos_dict():
-    sh = conectar_hoja(FILE_VEHICULOS)
+    # ¡AQUÍ ESTABA EL FALLO! Ahora forzamos la conexión por ID
+    sh = conectar_por_id(ID_VEHICULOS)
     if not sh: return {}
     try:
         ws = sh.sheet1
@@ -81,15 +91,19 @@ def cargar_vehiculos_dict():
         for fila in datos:
             if not fila: continue
             nombre = str(fila[0]).strip()
-            if nombre.lower() in ["nombre", "vehiculo", "vehicle", "nan", ""]: continue
+            # Filtros de limpieza
+            if not nombre or nombre.lower() in ["nombre", "vehiculo", "vehicle", "nan"]: continue
+            
             info = str(fila[1]).strip() if len(fila) > 1 else ""
             diccionario[nombre] = info
         return diccionario
-    except: return {}
+    except Exception as e:
+        # Si falla, devolvemos diccionario vacío pero no rompemos la app
+        return {}
 
 @st.cache_data(ttl=600)
 def cargar_trabajadores():
-    sh = conectar_hoja(FILE_ROSTER)
+    sh = conectar_por_id(ID_ROSTER)
     if not sh: return []
     try:
         try: ws = sh.worksheet("Roster")
@@ -98,7 +112,6 @@ def cargar_trabajadores():
         datos = ws.get_all_values()
         lista_trabajadores = []
         
-        # Leemos desde fila 9 (índice 8)
         for fila in datos[8:]:
             if len(fila) < 2: continue
             uid = str(fila[0]).strip()
@@ -122,7 +135,7 @@ def cargar_trabajadores():
 
 @st.cache_data(ttl=600)
 def cargar_config_prod():
-    sh = conectar_hoja(FILE_CONFIG_PROD)
+    sh = conectar_por_id(ID_CONFIG_PROD)
     if not sh: return {}
     try:
         datos = sh.sheet1.get_all_values()
@@ -134,7 +147,6 @@ def cargar_config_prod():
     except: return {}
 
 def buscar_columna_dia(ws, dia_num):
-    # Cabeceras en filas 4-9
     header_rows = ws.get_values("E4:AX9") 
     for r_idx, row in enumerate(header_rows):
         for c_idx, val in enumerate(row):
@@ -149,7 +161,7 @@ def buscar_columna_dia(ws, dia_num):
 # ==========================================
 
 def guardar_parte_en_nube(fecha_dt, lista_trabajadores, vehiculo, datos_paralizacion):
-    sh = conectar_hoja(FILE_ROSTER)
+    sh = conectar_por_id(ID_ROSTER)
     if not sh: return False
     try:
         try: ws = sh.worksheet("Roster")
@@ -184,14 +196,15 @@ def guardar_parte_en_nube(fecha_dt, lista_trabajadores, vehiculo, datos_paraliza
         return False
 
 def guardar_produccion(archivo_prod, hoja_prod, fila, col, valor):
-    sh = conectar_hoja(archivo_prod)
+    # Aquí seguimos usando nombre porque viene del Excel de config
+    sh = conectar_por_nombre(archivo_prod)
     if not sh: return False
     try:
         ws = sh.worksheet(hoja_prod)
         ws.update_cell(fila, col, valor)
         return True
     except Exception as e:
-        st.error(f"Error guardando: {e}")
+        st.error(f"Error guardando producción: {e}")
         return False
 
 # ==========================================
@@ -258,7 +271,9 @@ with tab1:
     except: fecha_sel = hoy; st.error("Fecha incorrecta")
 
     dicc_vehiculos = cargar_vehiculos_dict()
+    
     if dicc_vehiculos:
+        # Añadimos espacio en blanco
         nombres_veh = [""] + list(dicc_vehiculos.keys())
         vehiculo_sel = c_veh.selectbox("Vehículo / Lugar", nombres_veh)
         info_extra = dicc_vehiculos.get(vehiculo_sel, "")
@@ -289,6 +304,7 @@ with tab1:
     if not filtrados:
         opciones_nombres = ["Sin resultados"]
     else:
+        # Espacio en blanco al inicio
         opciones_nombres = [""] + [t['display'] for t in filtrados]
         
     trabajador_sel = c_add1.selectbox("Seleccionar Operario", opciones_nombres)
@@ -307,22 +323,10 @@ with tab1:
             if t_f < t_i: t_f += timedelta(days=1)
             horas = (t_f - t_i).total_seconds() / 3600
             
-            # --- CORRECCIÓN LÓGICA DE TURNO (PARA EVITAR EL ERROR) ---
             es_noche = False
             t_letra = "D"
-            
-            # Calculamos si es noche de forma segura
-            cond_manual_noche = (turno_manual == "N")
-            cond_auto_noche = False
-            
-            if turno_manual == "AUT":
-                if h_ini.hour >= 21 or h_ini.hour <= 4:
-                    cond_auto_noche = True
-            
-            if cond_manual_noche or cond_auto_noche:
-                es_noche = True
-                t_letra = "N"
-            # ---------------------------------------------------------
+            if turno_manual == "N" or (turno_manual=="AUT" and (h_ini.hour>=21 or h_ini.hour<=4)):
+                es_noche, t_letra = True, "N"
             
             if desc_comida: horas = max(0, horas - 1)
             
@@ -379,7 +383,7 @@ with tab2:
         tramo_sel = st.selectbox("Seleccionar Tramo", list(config_prod.keys()))
         archivo_prod = config_prod.get(tramo_sel)
         if archivo_prod:
-            sh_prod = conectar_hoja(archivo_prod)
+            sh_prod = conectar_por_nombre(archivo_prod)
             if sh_prod:
                 hojas = [ws.title for ws in sh_prod.worksheets() if "HR TRACK" in ws.title.upper()]
                 hoja_sel = st.selectbox("Hoja de Seguimiento", hojas) if hojas else None
@@ -418,3 +422,4 @@ with tab2:
                             if item_sel not in st.session_state.prod_dia: st.session_state.prod_dia[item_sel] = []
                             st.session_state.prod_dia[item_sel].append("POSTE")
                             st.rerun()
+
