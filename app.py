@@ -516,6 +516,18 @@ Aquí tienes SOLO EL CÓDIGO del bloque with t2:. Cópialo y sustituye tu bloque
 
 Python
 
+Es exactamente el mismo error que antes: has copiado mi frase de confirmación ("¡Entendido!...") dentro del archivo de código.
+
+Python no entiende español, solo entiende código. Esa frase ¡Entendido!... es lo que rompe el programa.
+
+🔴 PASO 1: CORREGIR EL ERROR
+Ve a la línea 494 (o donde te marque el error rojo) y BORRA cualquier texto que sea una frase normal. El código debe empezar directamente con comandos de Python (como with, if, def, etc.).
+
+🟢 PASO 2: EL CÓDIGO LIMPIO
+Para que no te vuelva a pasar, aquí tienes SOLO EL CÓDIGO. No copies nada de lo que estoy escribiendo ahora mismo. Copia ÚNICAMENTE lo que hay dentro del recuadro gris de abajo y sustituye tu bloque with t2: entero por esto.
+
+Python
+
 with t2:
     if not st.session_state.veh_glob: st.warning("⛔ Elige Vehículo en Pestaña 1")
     elif not st.session_state.TRAMO_ACTIVO: st.warning("⛔ Elige Tramo en menú lateral")
