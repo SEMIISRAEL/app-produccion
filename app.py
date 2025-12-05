@@ -507,8 +507,11 @@ with t2:
                 if datos_completos:
                     # --- FILTROS GLOBALES ---
                     todos_los_items = datos_completos.values()
+                    # Creamos listas ordenadas para los filtros
                     list_cim = sorted(list(set(d['datos'][2] for d in todos_los_items if len(d['datos'])>2 and d['datos'][2])))
+                    # IMPORTANTE: list_post debe estar bien ordenada (alfanuméricamente) para que el rango funcione bien
                     list_post = sorted(list(set(d['datos'][5] for d in todos_los_items if len(d['datos'])>5 and d['datos'][5])))
+                    
                     set_anc = set()
                     for d in todos_los_items:
                         row = d['datos']
@@ -581,68 +584,63 @@ with t2:
                         info = datos_completos[it]
                         fr = info['fila_excel']
                         d = info['datos']
+                        
+                        # Definir valores actuales para el poste seleccionado
+                        poste_actual_nombre = safe_val(d, 6) # Columna F (Poste)
 
                         # ===========================================================
-                        #       NUEVA ORGANIZACIÓN DE 5 PESTAÑAS (RESUMEN PRIMERO)
+                        #       ORGANIZACIÓN DE PESTAÑAS
                         # ===========================================================
                         
                         tab_res, tab_cim, tab_pos_anc, tab_men, tab_ten = st.tabs(["📊 Resumen", "🧱 Cimentación", "🗼 Postes y Anclajes", "🔧 Ménsulas", "⚡ Tendidos"])
 
-                        # --- PESTAÑA 0: RESUMEN GLOBAL ---
+                        # --- PESTAÑA 0: RESUMEN ---
                         with tab_res:
-                            st.markdown(f"### 📋 Estado General: {it}")
+                            st.markdown(f"### 📋 Estado: {it}")
                             st.markdown("---")
+                            f_cim_res = safe_val(d, 5)
+                            f_pos_res = safe_val(d, 8)
+                            f_men_res = safe_val(d, 38)
+                            f_ten_res = safe_val(d, 39) # Columna AM (LA-280)
                             
-                            # Lectura de fechas ejecutadas
-                            f_cim_res = safe_val(d, 5)  # Columna E
-                            f_pos_res = safe_val(d, 8)  # Columna H
-                            f_men_res = safe_val(d, 38) # Columna AL
-                            
-                            # Lógica Anclajes para Resumen
+                            # Lógica Anclajes
                             cols_t_res, cols_f_res = [18, 21, 24, 27], [20, 23, 26, 29]
-                            tiene_anclajes = False
-                            anclajes_completos = True
+                            tiene_anclajes = False; anclajes_completos = True
                             for i in range(4):
-                                if safe_val(d, cols_t_res[i]): # Si hay tipo definido
+                                if safe_val(d, cols_t_res[i]):
                                     tiene_anclajes = True
-                                    if not safe_val(d, cols_f_res[i]): # Si falta fecha
-                                        anclajes_completos = False
+                                    if not safe_val(d, cols_f_res[i]): anclajes_completos = False
 
-                            # Diseño en columnas (Dashboard)
                             cr1, cr2 = st.columns(2)
-                            
                             with cr1:
-                                if f_cim_res: st.success(f"🧱 **Cimentación:**\n\n✅ {f_cim_res}")
-                                else: st.error("🧱 **Cimentación:**\n\n❌ PENDIENTE")
+                                if f_cim_res: st.success(f"🧱 **Cim:** ✅ {f_cim_res}")
+                                else: st.error("🧱 **Cim:** ❌")
                                 
                                 if f_pos_res: 
-                                    # Verificamos si hay robot alertando
                                     if not st.session_state.chk_giros or not st.session_state.chk_aisl:
-                                        st.warning(f"🗼 **Poste:**\n\n⚠️ {f_pos_res} (Faltan remates)")
-                                    else:
-                                        st.success(f"🗼 **Poste:**\n\n✅ {f_pos_res}")
-                                else: st.error("🗼 **Poste:**\n\n❌ PENDIENTE")
+                                        st.warning(f"🗼 **Poste:** ⚠️ {f_pos_res} (Pendientes)")
+                                    else: st.success(f"🗼 **Poste:** ✅ {f_pos_res}")
+                                else: st.error("🗼 **Poste:** ❌")
 
                             with cr2:
-                                if not tiene_anclajes:
-                                    st.info("⚓ **Anclajes:**\n\n➖ No Aplica")
-                                elif anclajes_completos:
-                                    st.success("⚓ **Anclajes:**\n\n✅ Completados")
-                                else:
-                                    st.error("⚓ **Anclajes:**\n\n❌ PENDIENTES")
+                                if not tiene_anclajes: st.info("⚓ **Anc:** ➖")
+                                elif anclajes_completos: st.success("⚓ **Anc:** ✅")
+                                else: st.error("⚓ **Anc:** ❌")
                                     
-                                if f_men_res: st.success(f"🔧 **Ménsula:**\n\n✅ {f_men_res}")
-                                else: st.error("🔧 **Ménsula:**\n\n❌ PENDIENTE")
+                                if f_men_res: st.success(f"🔧 **Mén:** ✅ {f_men_res}")
+                                else: st.error("🔧 **Mén:** ❌")
+
+                            st.markdown("---")
+                            if f_ten_res: st.success(f"⚡ **Cable LA-280:** ✅ {f_ten_res}")
+                            else: st.warning("⚡ **Cable LA-280:** ❌ Pendiente")
 
                         # --- PESTAÑA 1: CIMENTACIÓN ---
                         with tab_cim:
                             st.subheader("Fase de Obra Civil")
                             c1, c2 = st.columns([1, 2])
                             ec, fc = safe_val(d, 3), safe_val(d, 5)
-                            c1.info(f"Tipo Cimentación: {ec}")
-                            
-                            if fc: 
-                                c2.success(f"✅ Ejecutado el: {fc}")
+                            c1.info(f"Tipo: {ec}")
+                            if fc: c2.success(f"✅ Ejecutado el: {fc}")
                             elif c2.button("Grabar CIMENTACIÓN", use_container_width=True):
                                 guardar_prod_con_nota_compleja(nom, hj, fr, 5, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, bk)
                                 if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
@@ -650,44 +648,28 @@ with t2:
 
                         # --- PESTAÑA 2: POSTES Y ANCLAJES ---
                         with tab_pos_anc:
-                            # PARTE A: EL POSTE (CON ROBOT)
                             st.subheader("1. Estructura (Poste)")
                             c1, c2 = st.columns([1, 2])
                             ep, fp = safe_val(d, 6), safe_val(d, 8)
-                            c1.info(f"Tipo Poste: {ep}")
-                            
+                            c1.info(f"Tipo: {ep}")
                             if st.session_state.chk_comp and fp:
                                 c2.success(f"✅ TERMINADO: {fp}")
-                                st.info("Poste completo y bloqueado.")
                             else:
                                 with c2:
-                                    st.write("**Lista de Chequeo:**")
                                     cc1, cc2, cc3 = st.columns(3)
                                     st.session_state.chk_giros = cc1.checkbox("Giros", value=st.session_state.chk_giros)
                                     st.session_state.chk_aisl = cc2.checkbox("Aisladores", value=st.session_state.chk_aisl)
                                     st.session_state.chk_comp = cc3.checkbox("Completo", value=st.session_state.chk_comp, on_change=on_completo_change)
-                                    
                                     if st.button("💾 Grabar POSTE", use_container_width=True):
-                                        txt = ""
-                                        estilo = "NORMAL"
-                                        
-                                        if not st.session_state.chk_giros:
-                                            txt += "GIROS FALTAN. "
-                                            estilo = "GIROS"
-                                        if not st.session_state.chk_aisl:
-                                            txt += "AISLADORES FALTAN. "
-                                            estilo = "AISLADORES"
-                                        if st.session_state.chk_comp:
-                                            estilo = "NORMAL"
-
+                                        txt = ""; estilo = "NORMAL"
+                                        if not st.session_state.chk_giros: txt += "GIROS FALTAN. "; estilo = "GIROS"
+                                        if not st.session_state.chk_aisl: txt += "AISLADORES FALTAN. "; estilo = "AISLADORES"
+                                        if st.session_state.chk_comp: estilo = "NORMAL"
                                         guardar_prod_con_nota_compleja(nom, hj, fr, 8, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, bk, txt, estilo_letra=estilo)
                                         if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
                                         st.session_state.prod_dia[it].append("POSTE"); st.rerun()
-
-                            st.divider()
-
-                            # PARTE B: ANCLAJES
-                            st.subheader("2. Anclajes")
+                            
+                            st.divider(); st.subheader("2. Anclajes")
                             cols_t, cols_f = [18, 21, 24, 27], [20, 23, 26, 29]
                             typs, cols_escritura, done = [], [], False
                             for i in range(4):
@@ -695,13 +677,10 @@ with t2:
                                 if v:
                                     typs.append(str(v)); cols_escritura.append(cols_f[i])
                                     if safe_val(d, cols_f[i]): done = True
-                            
                             c1, c2 = st.columns([1, 2])
                             c1.info(f"Tipos: {', '.join(typs) if typs else 'Ninguno'}")
-                            if not typs: 
-                                c2.write("-")
-                            elif done: 
-                                c2.success("✅ Anclajes ya registrados")
+                            if not typs: c2.write("-")
+                            elif done: c2.success("✅ Completos")
                             elif c2.button("Grabar ANCLAJES", use_container_width=True):
                                 hoy = datetime.now().strftime("%d/%m/%Y")
                                 for c_idx in cols_escritura:
@@ -716,15 +695,79 @@ with t2:
                             m_desc = f"{safe_val(d,32) or ''} {safe_val(d,33) or ''}".strip()
                             fm = safe_val(d, 38)
                             c1.info(f"Tipo: {m_desc or '-'}")
-                            if fm: 
-                                c2.success(f"Hecho: {fm}")
+                            if fm: c2.success(f"Hecho: {fm}")
                             elif c2.button("Grabar MÉNSULA", use_container_width=True):
                                 guardar_prod_con_nota_compleja(nom, hj, fr, 38, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, bk)
                                 if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
                                 st.session_state.prod_dia[it].append("MEN"); st.rerun()
 
-                        # --- PESTAÑA 4: TENDIDOS ---
+                        # --- PESTAÑA 4: TENDIDOS (LA-280) ---
                         with tab_ten:
-                            st.subheader("Fase de Tendido de Cable")
-                            st.info("🚧 Sección preparada para futuros datos de Tendido.")
-                            st.text_input("Notas de Tendido (Opcional)", key="nota_tendido")
+                            st.subheader("⚡ Tendido Cable LA-280")
+                            
+                            # Estado actual del poste seleccionado
+                            f_la280 = safe_val(d, 39) # Columna AM es la 39
+                            
+                            c1, c2 = st.columns([1,2])
+                            if f_la280:
+                                c1.success(f"Estado en {poste_actual_nombre}:")
+                                c2.success(f"✅ EJECUTADO: {f_la280}")
+                            else:
+                                c1.warning(f"Estado en {poste_actual_nombre}:")
+                                c2.error("❌ PENDIENTE")
+                            
+                            st.divider()
+                            st.write("### 🛤️ Registrar Tramo (Rango)")
+                            st.info("Selecciona el poste de inicio y final. Se marcará la fecha en la columna AM para todos los postes intermedios.")
+                            
+                            # Selectores de Inicio y Fin
+                            # Intentamos poner por defecto el poste actual en ambos selectores
+                            idx_def = 0
+                            if poste_actual_nombre in list_post:
+                                idx_def = list_post.index(poste_actual_nombre)
+                            
+                            col_sel1, col_sel2 = st.columns(2)
+                            p_ini = col_sel1.selectbox("Desde Poste:", list_post, index=idx_def)
+                            p_fin = col_sel2.selectbox("Hasta Poste:", list_post, index=idx_def)
+                            
+                            fecha_tendido = datetime.now().strftime("%d/%m/%Y")
+                            
+                            if st.button("🚀 GRABAR TENDIDO EN RANGO", type="primary", use_container_width=True):
+                                # LÓGICA DE RANGO
+                                try:
+                                    idx_a = list_post.index(p_ini)
+                                    idx_b = list_post.index(p_fin)
+                                    
+                                    # Aseguramos el orden (menor a mayor)
+                                    if idx_a > idx_b: idx_a, idx_b = idx_b, idx_a
+                                    
+                                    # Obtenemos la sublista de postes a actualizar
+                                    postes_a_actualizar = list_post[idx_a : idx_b + 1]
+                                    
+                                    st.write(f"⏳ Procesando {len(postes_a_actualizar)} postes...")
+                                    barra = st.progress(0)
+                                    
+                                    contador = 0
+                                    # Iteramos sobre todos los datos para encontrar las filas correctas
+                                    # (Es necesario porque 'datos_completos' tiene keys ID, no Post Name)
+                                    for key_item, info_item in datos_completos.items():
+                                        fila_nombre_poste = safe_val(info_item['datos'], 6) # Columna F
+                                        
+                                        if fila_nombre_poste in postes_a_actualizar:
+                                            # ENCONTRADO: Actualizamos Columna 39 (AM)
+                                            guardar_prod_con_nota_compleja(
+                                                nom, hj, info_item['fila_excel'], 39, 
+                                                fecha_tendido, st.session_state.veh_glob, bk, 
+                                                texto_extra="Tendido LA-280"
+                                            )
+                                            contador += 1
+                                            barra.progress(int((contador / len(postes_a_actualizar)) * 100))
+                                    
+                                    st.success(f"✅ Tendido registrado en {contador} postes (Columna AM).")
+                                    time.sleep(2)
+                                    if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
+                                    st.session_state.prod_dia[it].append(f"Tendido {p_ini}-{p_fin}")
+                                    st.rerun()
+                                    
+                                except Exception as e:
+                                    st.error(f"Error procesando rango: {e}")
