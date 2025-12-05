@@ -33,7 +33,7 @@ if 'logged_in' not in st.session_state:
     st.session_state.user_name = "Usuario Tablet"
     st.session_state.user_role = "encargado"
 
-# Variables Globales de Sesión
+# Variables Globales
 if 'ID_ROSTER_ACTIVO' not in st.session_state: st.session_state.ID_ROSTER_ACTIVO = None
 if 'TRAMO_ACTIVO' not in st.session_state: st.session_state.TRAMO_ACTIVO = None
 if 'ARCH_PROD' not in st.session_state: st.session_state.ARCH_PROD = None
@@ -42,13 +42,13 @@ if 'veh_glob' not in st.session_state: st.session_state.veh_glob = None
 if 'lista_sel' not in st.session_state: st.session_state.lista_sel = []
 if 'prod_dia' not in st.session_state: st.session_state.prod_dia = {}
 
-# VARIABLES PARA CHECKBOXES
+# VARIABLES CHECKBOXES (Iniciamos en False)
 if 'chk_giros' not in st.session_state: st.session_state.chk_giros = False
 if 'chk_aisl' not in st.session_state: st.session_state.chk_aisl = False
 if 'chk_comp' not in st.session_state: st.session_state.chk_comp = False
-if 'last_item_loaded' not in st.session_state: st.session_state.last_item_loaded = None
+if 'last_item' not in st.session_state: st.session_state.last_item = None
 
-# Callback para el checkbox completo
+# CALLBACK: Si marco completo, se marcan los hijos
 def on_completo_change():
     if st.session_state.chk_comp:
         st.session_state.chk_giros = True
@@ -74,7 +74,7 @@ def conectar_flexible(referencia):
             except: return None
 
 # ==========================================
-#      CARGA MASIVA DE DATOS
+#      CARGA MASIVA
 # ==========================================
 @st.cache_data(ttl=300) 
 def cargar_datos_completos_hoja(nombre_archivo, nombre_hoja):
@@ -97,6 +97,7 @@ def safe_val(lista, indice):
     if idx_py < len(lista): return lista[idx_py]
     return None
 
+# LECTURA DE NOTA (SIN CACHÉ PARA VER ESTADO REAL)
 def leer_nota_directa(nombre_archivo, nombre_hoja, fila, col):
     try:
         sh = conectar_flexible(nombre_archivo)
@@ -142,24 +143,15 @@ with st.sidebar:
         st.rerun()
     st.markdown("---")
     
-    # 1. ROSTER
     st.caption("📅 ROSTER ACTIVO")
     archivos_roster = buscar_archivos_roster()
-    
     if archivos_roster:
-        if st.session_state.user_role == "admin":
-            st.header("🗂️ Configuración")
-            nombre_roster_sel = st.selectbox("Archivo Horas:", list(archivos_roster.keys()))
-        else:
-            nombre_roster_sel = list(archivos_roster.keys())[0]
-            
+        nombre_roster_sel = list(archivos_roster.keys())[0]
         st.session_state.ID_ROSTER_ACTIVO = archivos_roster[nombre_roster_sel]
-        st.success(f"Conectado: {nombre_roster_sel}")
+        st.success(f"{nombre_roster_sel}")
     else: st.error("No hay Rosters.")
     
     st.markdown("---")
-
-    # 2. TRAMO
     st.caption("🏗️ PROYECTO / TRAMO")
     conf_prod = cargar_config_prod()
     
@@ -209,7 +201,6 @@ def cargar_trabajadores(id_roster):
         return lista
     except: return []
 
-# ESTA ES LA FUNCIÓN QUE FALTABA Y DABA EL ERROR NameError
 @st.cache_data(ttl=600)
 def obtener_hojas_track_cached(nombre_archivo):
     sh = conectar_flexible(nombre_archivo)
@@ -218,7 +209,7 @@ def obtener_hojas_track_cached(nombre_archivo):
     except: return []
 
 # ==========================================
-#      GUARDADO
+#      GUARDADO Y EMAIL
 # ==========================================
 def guardar_parte(fecha, lista, vehiculo, para, id_roster):
     sh = conectar_flexible(id_roster)
@@ -255,12 +246,18 @@ def guardar_prod_con_nota_compleja(archivo_principal, hoja, fila, col, valor, ve
         celda_a1 = rowcol_to_a1(fila, col)
         hora_act = datetime.now().strftime("%H:%M")
         nota = f"📅 {valor} - {hora_act}\n🚛 {vehiculo}\n👷 {st.session_state.user_name}"
+        
+        # IMPORTANTE: Si falta algo, lo ponemos en la nota para que el sistema lo sepa al recargar
         if texto_extra:
             nota += f"\n⚠️ PENDIENTE: {texto_extra}"
+        else:
+            # Si no falta nada, ponemos marca de completo
+            nota += "\n✅ COMPLETO"
+            
         ws.insert_note(celda_a1, nota)
         exito_principal = True
     except Exception as e:
-        st.error(f"❌ Error Principal: {e}")
+        st.error(f"❌ Error: {e}")
         return False
         
     if archivo_backup and archivo_backup != "":
@@ -379,10 +376,10 @@ with t1:
         c5.text_input("Detalle", value=dv.get(ve, "") if dv else "", disabled=True)
         
         st.divider()
-        filtro = st.radio("Filtro:", ["TODOS", "OBRA", "ALMACEN"], horizontal=True)
+        fl = st.radio("Filtro:", ["TODOS", "OBRA", "ALMACEN"], horizontal=True)
         trabs = cargar_trabajadores(st.session_state.ID_ROSTER_ACTIVO)
-        if filtro == "ALMACEN": fil = [t for t in trabs if t['tipo']=="ALMACEN"]; def_com=True
-        elif filtro == "OBRA": fil = [t for t in trabs if t['tipo']!="ALMACEN"]; def_com=False
+        if fl=="ALMACEN": fil = [t for t in trabs if t['tipo']=="ALMACEN"]; def_com=True
+        elif fl=="OBRA": fil = [t for t in trabs if t['tipo']!="ALMACEN"]; def_com=False
         else: fil = trabs; def_com=False
             
         opc = [""] + [t['display'] for t in fil] if fil else ["Sin personal disponible"]
@@ -453,7 +450,6 @@ with t2:
                     datos_completos = cargar_datos_completos_hoja(nom, hj)
                 
                 if datos_completos:
-                    # FILTROS
                     todos_los_items = datos_completos.values()
                     list_cim = sorted(list(set(d['datos'][2] for d in todos_los_items if len(d['datos'])>2 and d['datos'][2])))
                     list_post = sorted(list(set(d['datos'][5] for d in todos_los_items if len(d['datos'])>5 and d['datos'][5])))
@@ -488,27 +484,24 @@ with t2:
                     it = st.selectbox("Elemento", keys_filtradas)
                     
                     if it:
-                        # RECARGA DE ESTADO DEL POSTE
-                        if st.session_state.last_item_loaded != it:
-                            st.session_state.last_item_loaded = it
+                        if st.session_state.last_item != it:
+                            st.session_state.last_item = it
                             info = datos_completos[it]
                             fr = info['fila_excel']
-                            # Leemos la nota para ver pendientes
+                            # Leemos nota para ver estado
                             nota = leer_nota_directa(nom, hj, fr, 8)
-                            
-                            st.session_state.chk_giros = True
-                            st.session_state.chk_aisl = True
-                            st.session_state.chk_comp = False
-                            
-                            if "GIROS FALTAN" in nota: st.session_state.chk_giros = False
-                            if "AISLADORES FALTAN" in nota: st.session_state.chk_aisl = False
-                            
                             d = info['datos']
                             fp = safe_val(d, 8)
+                            
+                            # Lógica de inicialización: Si hay fecha y no falta nada -> Completo
                             if fp and "FALTAN" not in nota:
                                 st.session_state.chk_comp = True
                                 st.session_state.chk_giros = True
                                 st.session_state.chk_aisl = True
+                            else:
+                                st.session_state.chk_comp = False
+                                st.session_state.chk_giros = False if "GIROS FALTAN" in nota else True
+                                st.session_state.chk_aisl = False if "AISLADORES FALTAN" in nota else True
 
                         info = datos_completos[it]
                         fr = info['fila_excel']
@@ -527,25 +520,28 @@ with t2:
                         
                         st.divider()
                         
-                        # --- SECCIÓN POSTE CON CHECKBOXES REACTIVOS ---
                         c1, c2 = st.columns([1, 2])
                         ep, fp = safe_val(d, 6), safe_val(d, 8)
                         c1.info(f"Poste: {ep}")
                         
-                        with c2:
-                            st.write("**Montaje:**")
-                            cc1, cc2, cc3 = st.columns(3)
-                            st.session_state.chk_giros = cc1.checkbox("Giros", value=st.session_state.chk_giros)
-                            st.session_state.chk_aisl = cc2.checkbox("Aisladores", value=st.session_state.chk_aisl)
-                            st.session_state.chk_comp = cc3.checkbox("Completo", value=st.session_state.chk_comp, on_change=on_completo_change)
-                            
-                            if st.button("💾 Grabar POSTE"):
-                                txt = ""
-                                if not st.session_state.chk_giros: txt += "GIROS FALTAN. "
-                                if not st.session_state.chk_aisl: txt += "AISLADORES FALTAN. "
-                                guardar_prod_con_nota_compleja(nom, hj, fr, 8, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, bk, txt)
-                                if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
-                                st.session_state.prod_dia[it].append("POSTE"); st.rerun()
+                        # ZONA SEGURA DE POSTE
+                        if st.session_state.chk_comp and fp:
+                             c2.success("✅ TRABAJO FINALIZADO Y CERRADO")
+                        else:
+                             with c2:
+                                st.write("**Montaje:**")
+                                cc1, cc2, cc3 = st.columns(3)
+                                st.session_state.chk_giros = cc1.checkbox("Giros", value=st.session_state.chk_giros)
+                                st.session_state.chk_aisl = cc2.checkbox("Aisladores", value=st.session_state.chk_aisl)
+                                st.session_state.chk_comp = cc3.checkbox("Completo", value=st.session_state.chk_comp, on_change=on_completo_change)
+                                
+                                if st.button("💾 Grabar POSTE"):
+                                    txt = ""
+                                    if not st.session_state.chk_giros: txt += "GIROS FALTAN. "
+                                    if not st.session_state.chk_aisl: txt += "AISLADORES FALTAN. "
+                                    guardar_prod_con_nota_compleja(nom, hj, fr, 8, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, bk, txt)
+                                    if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
+                                    st.session_state.prod_dia[it].append("POSTE"); st.rerun()
 
                         st.divider()
                         c1, c2 = st.columns([1, 2])
@@ -576,5 +572,3 @@ with t2:
                                 guardar_prod_con_nota_compleja(nom, hj, fr, c_idx, hoy, st.session_state.veh_glob, bk)
                             if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
                             st.session_state.prod_dia[it].append("ANC"); st.rerun()
-
-
