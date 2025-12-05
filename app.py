@@ -491,6 +491,23 @@ with t1:
                         st.download_button("📥 PDF", pdf, nm, "application/pdf")
                         st.session_state.lista_sel=[]; st.session_state.prod_dia={}; time.sleep(3); st.rerun()
 
+¡Entendido! Ese cambio es fundamental para que el tendido sea correlativo.
+
+En obra lineal (ferrocarril), los Perfiles (Columna A) suelen estar ordenados secuencialmente en el Excel (1+000, 1+020, 1+040...), mientras que los nombres de los postes a veces saltan o se repiten. Usar la Columna A y respetar el orden de las filas del Excel es la forma más segura de hacer un rango "Desde... Hasta".
+
+Aquí tienes el bloque with t2: corregido.
+
+🛠️ Cambios Importantes en esta versión:
+Fuente de Datos: Ahora los desplegables de "Desde" y "Hasta" cargan los datos de la Columna A (Perfiles).
+
+Orden Real: He quitado el sorted() alfabético que desordenaba los kilómetros. Ahora uso list(datos_completos.keys()) para respetar estrictamente el orden físico en el que aparecen en tu hoja de Excel.
+
+Eficiencia: El "Robot" ya no busca uno a uno. Calcula el rango de filas exacto y va directo a grabar, por lo que es mucho más rápido.
+
+Copia y pega este bloque sustituyendo al anterior with t2::
+
+Python
+
 with t2:
     if not st.session_state.veh_glob: st.warning("⛔ Elige Vehículo en Pestaña 1")
     elif not st.session_state.TRAMO_ACTIVO: st.warning("⛔ Elige Tramo en menú lateral")
@@ -505,11 +522,15 @@ with t2:
                     datos_completos = cargar_datos_completos_hoja(nom, hj)
                 
                 if datos_completos:
-                    # --- FILTROS GLOBALES ---
+                    # --- PREPARACIÓN DE LISTAS ---
                     todos_los_items = datos_completos.values()
-                    # Creamos listas ordenadas para los filtros
+                    
+                    # 1. LISTA DE PERFILES (Columna A) - RESPETANDO ORDEN DEL EXCEL
+                    # Usamos las llaves del diccionario porque se cargaron secuencialmente
+                    list_perfiles_ordenada = list(datos_completos.keys())
+
+                    # 2. Listas para filtros (Sets para quitar duplicados)
                     list_cim = sorted(list(set(d['datos'][2] for d in todos_los_items if len(d['datos'])>2 and d['datos'][2])))
-                    # IMPORTANTE: list_post debe estar bien ordenada (alfanuméricamente) para que el rango funcione bien
                     list_post = sorted(list(set(d['datos'][5] for d in todos_los_items if len(d['datos'])>5 and d['datos'][5])))
                     
                     set_anc = set()
@@ -519,6 +540,7 @@ with t2:
                             if len(row) > idx and row[idx]: set_anc.add(row[idx])
                     list_anc = sorted(list(set_anc))
 
+                    # --- UI DE FILTROS ---
                     c_f1, c_f2, c_f3 = st.columns(3)
                     fil_cim = c_f1.selectbox("Filtro Cimentación", ["Todos"] + list_cim)
                     fil_post = c_f2.selectbox("Filtro Poste", ["Todos"] + list_post)
@@ -540,7 +562,8 @@ with t2:
                             if fil_anc not in vals_a: continue
                         keys_filtradas.append(k)
 
-                    it = st.selectbox("Elemento a Trabajar", keys_filtradas)
+                    # Selector Principal (Ahora muestra Perfiles porque keys_filtradas son Perfiles)
+                    it = st.selectbox("Perfil a Trabajar", keys_filtradas)
                     
                     if it:
                         # -----------------------------------------------------------
@@ -585,8 +608,8 @@ with t2:
                         fr = info['fila_excel']
                         d = info['datos']
                         
-                        # Definir valores actuales para el poste seleccionado
-                        poste_actual_nombre = safe_val(d, 6) # Columna F (Poste)
+                        # Datos visuales del perfil actual
+                        nombre_poste = safe_val(d, 6) # Columna F para mostrar info
 
                         # ===========================================================
                         #       ORGANIZACIÓN DE PESTAÑAS
@@ -596,14 +619,13 @@ with t2:
 
                         # --- PESTAÑA 0: RESUMEN ---
                         with tab_res:
-                            st.markdown(f"### 📋 Estado: {it}")
+                            st.markdown(f"### 📋 Perfil: {it} (Poste {nombre_poste})")
                             st.markdown("---")
                             f_cim_res = safe_val(d, 5)
                             f_pos_res = safe_val(d, 8)
                             f_men_res = safe_val(d, 38)
                             f_ten_res = safe_val(d, 39) # Columna AM (LA-280)
                             
-                            # Lógica Anclajes
                             cols_t_res, cols_f_res = [18, 21, 24, 27], [20, 23, 26, 29]
                             tiene_anclajes = False; anclajes_completos = True
                             for i in range(4):
@@ -704,70 +726,70 @@ with t2:
                         # --- PESTAÑA 4: TENDIDOS (LA-280) ---
                         with tab_ten:
                             st.subheader("⚡ Tendido Cable LA-280")
+                            st.caption("Actualización por Tramos (Rango de Perfiles)")
                             
-                            # Estado actual del poste seleccionado
-                            f_la280 = safe_val(d, 39) # Columna AM es la 39
+                            f_la280 = safe_val(d, 39) # Columna AM (39)
                             
                             c1, c2 = st.columns([1,2])
                             if f_la280:
-                                c1.success(f"Estado en {poste_actual_nombre}:")
-                                c2.success(f"✅ EJECUTADO: {f_la280}")
+                                c1.success(f"Estado en {it}:")
+                                c2.success(f"✅ {f_la280}")
                             else:
-                                c1.warning(f"Estado en {poste_actual_nombre}:")
+                                c1.warning(f"Estado en {it}:")
                                 c2.error("❌ PENDIENTE")
                             
                             st.divider()
-                            st.write("### 🛤️ Registrar Tramo (Rango)")
-                            st.info("Selecciona el poste de inicio y final. Se marcará la fecha en la columna AM para todos los postes intermedios.")
+                            st.write("### 🛤️ Registrar Tramo")
                             
-                            # Selectores de Inicio y Fin
-                            # Intentamos poner por defecto el poste actual en ambos selectores
+                            # 1. Selectores usando la LISTA REAL ORDENADA (Columna A)
+                            # Intentamos encontrar el índice del perfil actual para ponerlo por defecto
                             idx_def = 0
-                            if poste_actual_nombre in list_post:
-                                idx_def = list_post.index(poste_actual_nombre)
+                            if it in list_perfiles_ordenada:
+                                idx_def = list_perfiles_ordenada.index(it)
                             
                             col_sel1, col_sel2 = st.columns(2)
-                            p_ini = col_sel1.selectbox("Desde Poste:", list_post, index=idx_def)
-                            p_fin = col_sel2.selectbox("Hasta Poste:", list_post, index=idx_def)
+                            p_ini = col_sel1.selectbox("Desde Perfil:", list_perfiles_ordenada, index=idx_def)
+                            p_fin = col_sel2.selectbox("Hasta Perfil:", list_perfiles_ordenada, index=idx_def)
                             
                             fecha_tendido = datetime.now().strftime("%d/%m/%Y")
                             
-                            if st.button("🚀 GRABAR TENDIDO EN RANGO", type="primary", use_container_width=True):
-                                # LÓGICA DE RANGO
+                            if st.button("🚀 GRABAR TRAMO LA-280", type="primary", use_container_width=True):
                                 try:
-                                    idx_a = list_post.index(p_ini)
-                                    idx_b = list_post.index(p_fin)
+                                    # 2. Calcular los índices en la lista ordenada
+                                    idx_a = list_perfiles_ordenada.index(p_ini)
+                                    idx_b = list_perfiles_ordenada.index(p_fin)
                                     
-                                    # Aseguramos el orden (menor a mayor)
+                                    # Corregimos si el usuario puso el final antes del principio
                                     if idx_a > idx_b: idx_a, idx_b = idx_b, idx_a
                                     
-                                    # Obtenemos la sublista de postes a actualizar
-                                    postes_a_actualizar = list_post[idx_a : idx_b + 1]
+                                    # 3. Extraemos el SUB-GRUPO de perfiles a actualizar
+                                    perfiles_a_actualizar = list_perfiles_ordenada[idx_a : idx_b + 1]
                                     
-                                    st.write(f"⏳ Procesando {len(postes_a_actualizar)} postes...")
+                                    st.write(f"⏳ Grabando en {len(perfiles_a_actualizar)} perfiles (Columna AM)...")
                                     barra = st.progress(0)
                                     
                                     contador = 0
-                                    # Iteramos sobre todos los datos para encontrar las filas correctas
-                                    # (Es necesario porque 'datos_completos' tiene keys ID, no Post Name)
-                                    for key_item, info_item in datos_completos.items():
-                                        fila_nombre_poste = safe_val(info_item['datos'], 6) # Columna F
-                                        
-                                        if fila_nombre_poste in postes_a_actualizar:
-                                            # ENCONTRADO: Actualizamos Columna 39 (AM)
+                                    # 4. Iteramos sobre esa sub-lista y buscamos su fila en el diccionario
+                                    for perfil_id in perfiles_a_actualizar:
+                                        if perfil_id in datos_completos:
+                                            fila_real = datos_completos[perfil_id]['fila_excel']
+                                            
                                             guardar_prod_con_nota_compleja(
-                                                nom, hj, info_item['fila_excel'], 39, 
+                                                nom, hj, fila_real, 39, 
                                                 fecha_tendido, st.session_state.veh_glob, bk, 
-                                                texto_extra="Tendido LA-280"
+                                                texto_extra=f"Tendido LA-280 [{p_ini} -> {p_fin}]"
                                             )
                                             contador += 1
-                                            barra.progress(int((contador / len(postes_a_actualizar)) * 100))
+                                            barra.progress(int((contador / len(perfiles_a_actualizar)) * 100))
                                     
-                                    st.success(f"✅ Tendido registrado en {contador} postes (Columna AM).")
+                                    st.success(f"✅ ¡Hecho! {contador} perfiles actualizados.")
                                     time.sleep(2)
+                                    
+                                    # Log para el reporte diario
                                     if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
-                                    st.session_state.prod_dia[it].append(f"Tendido {p_ini}-{p_fin}")
+                                    st.session_state.prod_dia[it].append(f"Tendido LA-280 ({p_ini}-{p_fin})")
+                                    
                                     st.rerun()
                                     
                                 except Exception as e:
-                                    st.error(f"Error procesando rango: {e}")
+                                    st.error(f"Error en el proceso: {e}")
