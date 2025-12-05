@@ -26,7 +26,7 @@ ID_VEHICULOS = "19PWpeCz8pl5NEDpK-omX5AdrLuJgOPrn6uSjtUGomY8"
 ID_CONFIG_PROD = "1uCu5pq6l1CjqXKPEkGkN-G5Z5K00qiV9kR_bGOii6FU"
 
 # ==========================================
-#           LOGIN Y ESTADO
+#           INICIALIZACIÓN DE ESTADO
 # ==========================================
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = True
@@ -42,12 +42,15 @@ if 'veh_glob' not in st.session_state: st.session_state.veh_glob = None
 if 'lista_sel' not in st.session_state: st.session_state.lista_sel = []
 if 'prod_dia' not in st.session_state: st.session_state.prod_dia = {}
 
-# VARIABLES CHECKBOXES
+# VARIABLES CHECKBOXES (Estado Inicial)
 if 'chk_giros' not in st.session_state: st.session_state.chk_giros = False
 if 'chk_aisl' not in st.session_state: st.session_state.chk_aisl = False
 if 'chk_comp' not in st.session_state: st.session_state.chk_comp = False
-if 'last_item' not in st.session_state: st.session_state.last_item = None
 
+# VARIABLE DE CONTROL DE CARGA (CORREGIDA)
+if 'last_item_loaded' not in st.session_state: st.session_state.last_item_loaded = None
+
+# Callback: Si marcas completo, los otros se ponen True
 def on_completo_change():
     if st.session_state.chk_comp:
         st.session_state.chk_giros = True
@@ -73,7 +76,7 @@ def conectar_flexible(referencia):
             except: return None
 
 # ==========================================
-#      CARGA MASIVA
+#      CARGA MASIVA (CACHÉ)
 # ==========================================
 @st.cache_data(ttl=300) 
 def cargar_datos_completos_hoja(nombre_archivo, nombre_hoja):
@@ -96,6 +99,7 @@ def safe_val(lista, indice):
     if idx_py < len(lista): return lista[idx_py]
     return None
 
+# Leer nota en tiempo real (sin caché)
 def leer_nota_directa(nombre_archivo, nombre_hoja, fila, col):
     try:
         sh = conectar_flexible(nombre_archivo)
@@ -135,10 +139,12 @@ def cargar_config_prod():
     except: return {}
 
 with st.sidebar:
-    st.write(f"👤 **{st.session_state.user_name}**")
+    st.write(f"👤 **{st.session_state.user_name.upper()}**")
+    if st.button("Cerrar Sesión"):
+        st.session_state.logged_in = False
+        st.rerun()
     st.markdown("---")
     
-    # 1. ROSTER
     st.caption("📅 ROSTER ACTIVO")
     archivos_roster = buscar_archivos_roster()
     if archivos_roster:
@@ -148,11 +154,8 @@ with st.sidebar:
     else: st.error("No hay Rosters.")
     
     st.markdown("---")
-
-    # 2. TRAMO
     st.caption("🏗️ PROYECTO / TRAMO")
     conf_prod = cargar_config_prod()
-    
     if conf_prod:
         tramo_sel = st.selectbox("Seleccionar Tramo:", list(conf_prod.keys()), index=None, placeholder="Elige...")
         if tramo_sel:
@@ -187,7 +190,6 @@ def cargar_trabajadores(id_roster):
             if r < len(datos) and hoy_dia in datos[r]: 
                 col_dia = datos[r].index(hoy_dia)
                 break
-        
         for fila in datos[8:]:
             if len(fila) < 2: continue
             uid, nom = str(fila[0]).strip(), str(fila[1]).strip()
@@ -207,7 +209,7 @@ def obtener_hojas_track_cached(nombre_archivo):
     except: return []
 
 # ==========================================
-#      GUARDADO Y EMAIL
+#      GUARDADO
 # ==========================================
 def guardar_parte(fecha, lista, vehiculo, para, id_roster):
     sh = conectar_flexible(id_roster)
@@ -242,8 +244,9 @@ def guardar_prod_con_nota_compleja(archivo_principal, hoja, fila, col, valor, ve
         celda_a1 = rowcol_to_a1(fila, col)
         hora_act = datetime.now().strftime("%H:%M")
         nota = f"📅 {valor} - {hora_act}\n🚛 {vehiculo}\n👷 {st.session_state.user_name}"
-        if texto_extra:
-            nota += f"\n⚠️ PENDIENTE: {texto_extra}"
+        if texto_extra: nota += f"\n⚠️ PENDIENTE: {texto_extra}"
+        else: nota += "\n✅ COMPLETO"
+            
         ws.insert_note(celda_a1, nota)
         exito_principal = True
     except Exception as e:
@@ -263,7 +266,7 @@ def guardar_prod_con_nota_compleja(archivo_principal, hoja, fila, col, valor, ve
     return exito_principal
 
 # ==========================================
-#      PDF GENERATOR
+#      PDF
 # ==========================================
 def generar_pdf(fecha, jefe, lista, para, prod):
     b = BytesIO()
@@ -440,66 +443,35 @@ with t2:
                     datos_completos = cargar_datos_completos_hoja(nom, hj)
                 
                 if datos_completos:
-                    # FILTROS
-                    todos_los_items = datos_completos.values()
-                    list_cim = sorted(list(set(d['datos'][2] for d in todos_los_items if len(d['datos'])>2 and d['datos'][2])))
-                    list_post = sorted(list(set(d['datos'][5] for d in todos_los_items if len(d['datos'])>5 and d['datos'][5])))
-                    set_anc = set()
-                    for d in todos_los_items:
-                        row = d['datos']
-                        for idx in [17, 20, 23, 26]:
-                            if len(row) > idx and row[idx]: set_anc.add(row[idx])
-                    list_anc = sorted(list(set_anc))
-
-                    c_f1, c_f2, c_f3 = st.columns(3)
-                    fil_cim = c_f1.selectbox("Filtro Cimentación", ["Todos"] + list_cim)
-                    fil_post = c_f2.selectbox("Filtro Poste", ["Todos"] + list_post)
-                    fil_anc = c_f3.selectbox("Filtro Anclaje", ["Todos"] + list_anc)
-                    fil_km = st.text_input("Filtro Km")
-
-                    keys_filtradas = []
-                    for k, info in datos_completos.items():
-                        row = info['datos']
-                        if fil_km and fil_km not in str(k): continue
-                        if fil_cim != "Todos":
-                            val_c = row[2] if len(row)>2 else ""
-                            if val_c != fil_cim: continue
-                        if fil_post != "Todos":
-                            val_p = row[5] if len(row)>5 else ""
-                            if val_p != fil_post: continue
-                        if fil_anc != "Todos":
-                            vals_a = [row[i] for i in [17,20,23,26] if len(row)>i]
-                            if fil_anc not in vals_a: continue
-                        keys_filtradas.append(k)
-
-                    it = st.selectbox("Elemento", keys_filtradas)
+                    fil = st.text_input("Filtro Km")
+                    keys = list(datos_completos.keys())
+                    if fil: keys = [k for k in keys if fil in str(k)]
+                    it = st.selectbox("Elemento", keys)
                     
                     if it:
-                        # --- LÓGICA DE CARGA DE ESTADO CON NOTAS ---
+                        # VERIFICACIÓN DE ESTADO AL CAMBIAR DE ÍTEM
                         if st.session_state.last_item_loaded != it:
                             st.session_state.last_item_loaded = it
                             info = datos_completos[it]
                             fr = info['fila_excel']
                             
-                            # Leemos la nota REAL (sin caché)
-                            nota = leer_nota_directa(nom, hj, fr, 8)
+                            # Leemos la nota en tiempo real
+                            nota = leer_nota_directa(nom, hj, fr, 8) # Celda del poste (Col 8)
                             
                             d = info['datos']
                             fp = safe_val(d, 8)
                             
-                            # Lógica de completado
-                            # SI hay fecha Y NO hay nota de faltas -> Completo
+                            # Lógica de inicialización inteligente
                             if fp and "FALTAN" not in nota:
                                 st.session_state.chk_comp = True
                                 st.session_state.chk_giros = True
                                 st.session_state.chk_aisl = True
                             else:
-                                # Si no hay fecha o hay nota de faltas -> Pendiente
                                 st.session_state.chk_comp = False
                                 st.session_state.chk_giros = False if "GIROS FALTAN" in nota else True
                                 st.session_state.chk_aisl = False if "AISLADORES FALTAN" in nota else True
                                 
-                                # Caso especial: Si es nuevo (sin fecha y sin nota), todo a False
+                                # Si está vacío de verdad (sin fecha), limpiamos todo
                                 if not fp and not nota:
                                     st.session_state.chk_giros = False
                                     st.session_state.chk_aisl = False
@@ -521,22 +493,17 @@ with t2:
                         
                         st.divider()
                         
-                        # --- SECCIÓN POSTE BLINDADA ---
+                        # --- SECCIÓN POSTE INTELIGENTE ---
                         c1, c2 = st.columns([1, 2])
                         ep, fp = safe_val(d, 6), safe_val(d, 8)
                         c1.info(f"Poste: {ep}")
                         
-                        # Comprobación para ver si bloqueamos
-                        bloqueado = False
+                        # BLOQUEO SI ESTÁ COMPLETADO (VERDE)
                         if st.session_state.chk_comp and fp:
-                            bloqueado = True
-
-                        if bloqueado:
-                             c2.success("✅ TRABAJO FINALIZADO Y CERRADO")
-                             # Solo mostramos info, no botones
-                             st.write(f"📅 Fecha: {fp}")
+                            c2.success(f"✅ TERMINADO: {fp}")
                         else:
-                             with c2:
+                            # MODO EDICIÓN (PENDIENTE O NUEVO)
+                            with c2:
                                 st.write("**Montaje:**")
                                 cc1, cc2, cc3 = st.columns(3)
                                 st.session_state.chk_giros = cc1.checkbox("Giros", value=st.session_state.chk_giros)
