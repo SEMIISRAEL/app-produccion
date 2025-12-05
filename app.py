@@ -74,7 +74,7 @@ def conectar_flexible(referencia):
             except: return None
 
 # ==========================================
-#      CARGA MASIVA
+#      CARGA MASIVA DE DATOS
 # ==========================================
 @st.cache_data(ttl=300) 
 def cargar_datos_completos_hoja(nombre_archivo, nombre_hoja):
@@ -136,18 +136,30 @@ def cargar_config_prod():
     except: return {}
 
 with st.sidebar:
-    st.write(f"👤 **{st.session_state.user_name}**")
+    st.write(f"👤 **{st.session_state.user_name.upper()}**")
+    if st.button("Cerrar Sesión"):
+        st.session_state.logged_in = False
+        st.rerun()
     st.markdown("---")
     
+    # 1. ROSTER
     st.caption("📅 ROSTER ACTIVO")
     archivos_roster = buscar_archivos_roster()
+    
     if archivos_roster:
-        nombre_roster_sel = list(archivos_roster.keys())[0]
+        if st.session_state.user_role == "admin":
+            st.header("🗂️ Configuración")
+            nombre_roster_sel = st.selectbox("Archivo Horas:", list(archivos_roster.keys()))
+        else:
+            nombre_roster_sel = list(archivos_roster.keys())[0]
+            
         st.session_state.ID_ROSTER_ACTIVO = archivos_roster[nombre_roster_sel]
-        st.success(f"{nombre_roster_sel}")
+        st.success(f"Conectado: {nombre_roster_sel}")
     else: st.error("No hay Rosters.")
     
     st.markdown("---")
+
+    # 2. TRAMO
     st.caption("🏗️ PROYECTO / TRAMO")
     conf_prod = cargar_config_prod()
     
@@ -171,7 +183,7 @@ def cargar_vehiculos_dict():
         return {r[0]: (r[1] if len(r)>1 else "") for r in sh.sheet1.get_all_values() if r and r[0] and "veh" not in r[0].lower()}
     except: return {}
 
-def cargar_trabajadores(id_roster, dia_mes):
+def cargar_trabajadores(id_roster):
     if not id_roster: return []
     sh = conectar_flexible(id_roster)
     if not sh: return []
@@ -180,38 +192,30 @@ def cargar_trabajadores(id_roster, dia_mes):
         datos = ws.get_all_values()
         lista = []
         col_dia = 14 
-        str_dia = str(dia_mes)
-        
-        # Buscar columna día
+        hoy_dia = str(datetime.now().day)
         for r in range(3, 9):
-            if r < len(datos) and str_dia in datos[r]: 
-                col_dia = datos[r].index(str_dia)
+            if r < len(datos) and hoy_dia in datos[r]: 
+                col_dia = datos[r].index(hoy_dia)
                 break
         
         for fila in datos[8:]:
             if len(fila) < 2: continue
             uid, nom = str(fila[0]).strip(), str(fila[1]).strip()
             if not uid or "id" in uid.lower(): continue
-            
-            # FILTRO: ¿YA FICHÓ?
-            if len(fila) > col_dia:
-                val = str(fila[col_dia]).strip()
-                if val and val not in ["", "None"]: continue 
-            
+            if len(fila) > col_dia and fila[col_dia]: continue 
             tipo = "OBRA"
             if len(fila) > 2 and ("A" == str(fila[2]).upper() or "ALMACEN" in str(fila[2]).upper()): tipo = "ALMACEN"
             lista.append({"display": f"{uid} - {nom}", "tipo": tipo, "id": uid, "nombre_solo": nom})
         return lista
     except: return []
 
-def buscar_columna_dia_idx(ws, dia_num):
-    header_rows = ws.get_values("E4:AX9") 
-    for r_idx, row in enumerate(header_rows):
-        for c_idx, val in enumerate(row):
-            if val and (str(val).strip() == str(dia_num)): return c_idx + 5 
-    dias_dif = int(dia_num) - 21
-    if dias_dif < 0: dias_dif += 30
-    return 14 + (dias_dif * 2)
+# ESTA ES LA FUNCIÓN QUE FALTABA Y DABA EL ERROR NameError
+@st.cache_data(ttl=600)
+def obtener_hojas_track_cached(nombre_archivo):
+    sh = conectar_flexible(nombre_archivo)
+    if not sh: return None
+    try: return [ws.title for ws in sh.worksheets() if "HR TRACK" in ws.title.upper()]
+    except: return []
 
 # ==========================================
 #      GUARDADO
@@ -221,7 +225,8 @@ def guardar_parte(fecha, lista, vehiculo, para, id_roster):
     if not sh: return False
     try:
         ws = sh.sheet1 if "Roster" not in [w.title for w in sh.worksheets()] else sh.worksheet("Roster")
-        c_idx = buscar_columna_dia_idx(ws, fecha.day)
+        header = ws.range(f"E4:AX9")
+        c_idx = next((c.col for c in header if str(c.value) == str(fecha.day)), 14)
         ids_col = ws.col_values(1)
         upds = []
         for t in lista:
@@ -244,7 +249,6 @@ def guardar_prod_con_nota_compleja(archivo_principal, hoja, fila, col, valor, ve
     exito_principal = False
     sh = conectar_flexible(archivo_principal)
     if not sh: return False
-    
     try:
         ws = sh.worksheet(hoja)
         ws.update_cell(fila, col, valor)
@@ -253,7 +257,6 @@ def guardar_prod_con_nota_compleja(archivo_principal, hoja, fila, col, valor, ve
         nota = f"📅 {valor} - {hora_act}\n🚛 {vehiculo}\n👷 {st.session_state.user_name}"
         if texto_extra:
             nota += f"\n⚠️ PENDIENTE: {texto_extra}"
-            
         ws.insert_note(celda_a1, nota)
         exito_principal = True
     except Exception as e:
@@ -376,20 +379,11 @@ with t1:
         c5.text_input("Detalle", value=dv.get(ve, "") if dv else "", disabled=True)
         
         st.divider()
-        fl = st.radio("Filtro:", ["TODOS", "OBRA", "ALMACEN"], horizontal=True)
-        
-        with st.spinner("Actualizando personal..."):
-            trabs = cargar_trabajadores(st.session_state.ID_ROSTER_ACTIVO, d)
-            
-        if fl == "ALMACEN": 
-            fil = [t for t in trabs if t['tipo']=="ALMACEN"]
-            def_com = True
-        elif fl == "OBRA": 
-            fil = [t for t in trabs if t['tipo']!="ALMACEN"]
-            def_com = False
-        else: 
-            fil = trabs
-            def_com = False
+        filtro = st.radio("Filtro:", ["TODOS", "OBRA", "ALMACEN"], horizontal=True)
+        trabs = cargar_trabajadores(st.session_state.ID_ROSTER_ACTIVO)
+        if filtro == "ALMACEN": fil = [t for t in trabs if t['tipo']=="ALMACEN"]; def_com=True
+        elif filtro == "OBRA": fil = [t for t in trabs if t['tipo']!="ALMACEN"]; def_com=False
+        else: fil = trabs; def_com=False
             
         opc = [""] + [t['display'] for t in fil] if fil else ["Sin personal disponible"]
         trab_sel = st.selectbox("Seleccionar Operario", opc)
@@ -431,13 +425,7 @@ with t1:
             elif not ve: st.error("Elige vehículo")
             else:
                 with st.spinner("Guardando..."):
-                    ok = guardar_parte(
-                        fecha_sel, 
-                        st.session_state.lista_sel, 
-                        ve, 
-                        d_para, 
-                        st.session_state.ID_ROSTER_ACTIVO
-                    )
+                    ok = guardar_parte(fecha_sel, st.session_state.lista_sel, ve, d_para, st.session_state.ID_ROSTER_ACTIVO)
                     pdf = generar_pdf(str(fecha_sel.date()), ve, st.session_state.lista_sel, d_para, st.session_state.prod_dia)
                     nm = f"Parte_{fecha_sel.date()}_{ve}.pdf"
                     try:
@@ -500,10 +488,12 @@ with t2:
                     it = st.selectbox("Elemento", keys_filtradas)
                     
                     if it:
+                        # RECARGA DE ESTADO DEL POSTE
                         if st.session_state.last_item_loaded != it:
                             st.session_state.last_item_loaded = it
                             info = datos_completos[it]
                             fr = info['fila_excel']
+                            # Leemos la nota para ver pendientes
                             nota = leer_nota_directa(nom, hj, fr, 8)
                             
                             st.session_state.chk_giros = True
@@ -537,6 +527,7 @@ with t2:
                         
                         st.divider()
                         
+                        # --- SECCIÓN POSTE CON CHECKBOXES REACTIVOS ---
                         c1, c2 = st.columns([1, 2])
                         ep, fp = safe_val(d, 6), safe_val(d, 8)
                         c1.info(f"Poste: {ep}")
@@ -557,7 +548,6 @@ with t2:
                                 st.session_state.prod_dia[it].append("POSTE"); st.rerun()
 
                         st.divider()
-                        
                         c1, c2 = st.columns([1, 2])
                         m_desc = f"{safe_val(d,32) or ''} {safe_val(d,33) or ''}".strip()
                         fm = safe_val(d, 38)
@@ -586,4 +576,5 @@ with t2:
                                 guardar_prod_con_nota_compleja(nom, hj, fr, c_idx, hoy, st.session_state.veh_glob, bk)
                             if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
                             st.session_state.prod_dia[it].append("ANC"); st.rerun()
+
 
