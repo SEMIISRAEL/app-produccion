@@ -22,12 +22,19 @@ from gspread.utils import rowcol_to_a1
 st.set_page_config(page_title="Gestor SEMI - Tablet", layout="wide", page_icon="🏗️")
 
 # --- IDs FIJOS ---
-ID_ROSTER = "1ezFvpyTzkL98DJjpXeeGuqbMy_kTZItUC9FDkxFlD08"
 ID_VEHICULOS = "19PWpeCz8pl5NEDpK-omX5AdrLuJgOPrn6uSjtUGomY8"
 ID_CONFIG_PROD = "1uCu5pq6l1CjqXKPEkGkN-G5Z5K00qiV9kR_bGOii6FU"
 
+# === INICIALIZACIÓN GLOBAL DE VARIABLES (EL FIX) ===
+ID_ROSTER_ACTIVO = None
+TRAMO_ACTIVO = None
+ARCHIVO_PROD_ACTIVO = None
+nombre_roster_sel = "N/A"
+nombre_tramo_sel = "N/A"
+nombre_archivo_prod_activo = "N/A"
+
 # ==========================================
-#           LOGIN / CONEXIÓN
+#           LOGIN
 # ==========================================
 def check_login():
     if 'logged_in' not in st.session_state:
@@ -58,82 +65,92 @@ def check_login():
 if not check_login(): st.stop()
 
 # ==========================================
-#      CARGA CONFIGURACIÓN (LEE COL C)
+#      SIDEBAR (CONFIGURACIÓN IZQUIERDA)
 # ==========================================
+@st.cache_data(ttl=300)
+def buscar_archivos_roster():
+    try:
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=['https://www.googleapis.com/auth/drive'])
+        service = build('drive', 'v3', credentials=creds)
+        results = service.files().list(q="name contains 'Roster' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false", fields="files(id, name)", orderBy="name desc").execute()
+        return {f['name']: f['id'] for f in results.get('files', [])}
+    except: return {}
+
 @st.cache_data(ttl=600)
 def cargar_config_prod():
-    """Lee el archivo config y devuelve {Tramo: (Archivo Principal, Archivo Backup)}"""
     sh = conectar_flexible(ID_CONFIG_PROD)
     if not sh: return {}
     try:
-        # Leemos Columna A, B, y C
+        # Lee {Tramo: (Archivo Principal, Archivo Backup)}
         datos = sh.sheet1.get_all_values()
         config = {}
         for row in datos:
-            if len(row) >= 3 and row[0] and row[1]: # Asegura que haya 3 columnas
+            if len(row) >= 3 and row[0] and row[1]: # Debe tener 3 columnas para Principal/Backup
                 tramo = row[0].strip()
                 archivo_principal = row[1].strip()
-                archivo_backup = row[2].strip() if len(row) > 2 else "" # Columna C (índice 2)
-                
+                archivo_backup = row[2].strip() if len(row) > 2 else "" 
                 if tramo and archivo_principal:
                     config[tramo] = (archivo_principal, archivo_backup)
-            # Solo saltamos la primera fila si es cabecera
             elif row and row[0].lower() in ["tramo", "seccion"]: continue 
         return config
-    except Exception as e: 
-        st.warning(f"Error cargando config prod: {e}")
-        return {}
+    except: return {}
 
-# ==========================================
-#      GUARDADO DUAL (CON FALLBACK)
-# ==========================================
-
-def guardar_prod_con_nota(archivo_principal, hoja, fila, col, valor, vehiculo, archivo_backup=None):
-    """Guarda en el archivo principal (obligatorio) y en el backup (best effort)"""
+with st.sidebar:
+    st.write(f"👤 **{st.session_state.user_name}**")
+    if st.button("Cerrar Sesión"):
+        st.session_state.logged_in = False
+        st.rerun()
+    st.markdown("---")
     
-    exito_principal = False
+    # --- 1. ROSTER ---
+    st.caption("📅 ROSTER ACTIVO")
+    archivos_roster = buscar_archivos_roster()
     
-    # 1. ESCRITURA EN ARCHIVO PRINCIPAL (MANDATORIO)
-    sh = conectar_flexible(archivo_principal)
-    if not sh: 
-        st.error(f"❌ No se encontró el archivo principal: {archivo_principal}")
-        return False
+    if archivos_roster:
+        if st.session_state.user_role == "admin":
+            st.header("🗂️ Configuración")
+            nombre_roster_sel = st.selectbox("Archivo Horas:", list(archivos_roster.keys()))
+        else:
+            nombre_roster_sel = list(archivos_roster.keys())[0] # Auto-selecciona el más nuevo
+            
+        ID_ROSTER_ACTIVO = archivos_roster[nombre_roster_sel]
+        st.success(f"Conectado: {nombre_roster_sel}")
+    else: st.error("No hay Rosters.")
     
-    try:
-        ws = sh.worksheet(hoja)
-        ws.update_cell(fila, col, valor)
-        
-        # Añadir NOTA
-        celda_a1 = rowcol_to_a1(fila, col)
-        hora_act = datetime.now().strftime("%H:%M")
-        nota = f"📅 {valor} - {hora_act}\n🚛 {vehiculo}\n👷 {st.session_state.user_name}"
-        ws.insert_note(celda_a1, nota)
-        
-        exito_principal = True
-        
-    except Exception as e:
-        st.error(f"❌ Error al escribir en hoja principal: {e}")
-        return False
-        
-    # 2. ESCRITURA EN BACKUP (OPCIONAL/BEST EFFORT)
-    if archivo_backup and exito_principal:
-        try:
-            sh_bk = conectar_flexible(archivo_backup)
-            if sh_bk:
-                ws_bk = sh_bk.worksheet(hoja)
-                ws_bk.update_cell(fila, col, valor)
-                ws_bk.insert_note(rowcol_to_a1(fila, col), nota)
-        except Exception as e:
-            st.warning(f"⚠️ Atención: Falló la copia de seguridad en {archivo_backup} ({e})")
+    st.markdown("---")
 
-    # Limpiamos caché para que el usuario vea el estado actual del archivo
-    cargar_datos_completos_hoja.clear() 
-    return True
+    # --- 2. TRAMO ---
+    st.caption("🏗️ PROYECTO / TRAMO")
+    conf_prod = cargar_config_prod()
+    
+    if conf_prod:
+        tramo_sel = st.selectbox("Seleccionar Tramo:", list(conf_prod.keys()), index=None, placeholder="Elige...")
+        if tramo_sel:
+            TRAMO_ACTIVO = tramo_sel
+            ARCHIVO_PROD_ACTIVO, ARCHIVO_PROD_BACKUP_ACTIVO = conf_prod.get(tramo_sel)
+            st.info(f"📁 {ARCHIVO_PROD_ACTIVO}")
+    else:
+        st.warning("Sin config producción")
 
 # ==========================================
-#      RESTO DE FUNCIONES (UNTOUCHED)
+#           CONEXIÓN Y LÓGICA
 # ==========================================
-# ... (Funciones auxiliares, guardado de horas, PDF, etc.)
+@st.cache_resource
+def get_gspread_client():
+    scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+    creds_dict = dict(st.secrets["gcp_service_account"])
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    return gspread.authorize(creds)
+
+def conectar_flexible(referencia):
+    client = get_gspread_client()
+    try: return client.open_by_key(referencia)
+    except:
+        try: return client.open(referencia)
+        except:
+            try: return client.open(referencia.replace(".xlsx", ""))
+            except: return None
 
 def guardar_parte(fecha, lista, vehiculo, para, id_roster):
     sh = conectar_flexible(id_roster)
@@ -143,33 +160,81 @@ def guardar_parte(fecha, lista, vehiculo, para, id_roster):
         header = ws.range(f"E4:AX9")
         c_idx = next((c.col for c in header if str(c.value) == str(fecha.day)), 14)
         ids_col = ws.col_values(1)
-        upds = []
+        cells_to_update = []
         for t in lista:
             try: 
                 r = ids_col.index(t['ID']) + 1
-                upds.append(gspread.Cell(r, c_idx, t['Turno_Letra']))
-                upds.append(gspread.Cell(r, c_idx+1, t['Total_Horas']))
+                cells_to_update.append(gspread.Cell(r, c_idx, t['Turno_Letra']))
+                cells_to_update.append(gspread.Cell(r, c_idx+1, t['Total_Horas']))
             except: pass
-        if upds: ws.update_cells(upds)
-        if para:
+        if cells_to_update: ws.update_cells(cells_to_update)
+        if datos_paralizacion:
             try: wp = sh.worksheet("Paralizaciones")
-            except: wp = sh.add_worksheet("Paralizaciones", 1000, 10)
+            except: 
+                wp = sh.add_worksheet("Paralizaciones", 1000, 10)
+                wp.append_row(["Fecha", "Vehiculo/Lugar", "Inicio", "Fin", "Horas", "Motivo", "Usuario"])
             wp.append_row([str(fecha.date()), vehiculo, para['inicio'], para['fin'], para['duracion'], para['motivo'], st.session_state.user_name])
         return True
     except: return False
 
-def generar_pdf(fecha, jefe, lista, para, prod):
-    b = BytesIO()
-    c = canvas.Canvas(b, pagesize=A4); _, h = A4
-    start_time, end_time = "________", "________"
-    if lista: start_time, end_time = lista[0]['H_Inicio'], lista[0]['H_Fin']
+def guardar_prod_con_nota(archivo_principal, hoja, fila, col, valor, vehiculo, archivo_backup=None):
+    exito_principal = False
+    
+    # 1. ESCRITURA PRINCIPAL
+    sh = conectar_flexible(archivo_principal)
+    if not sh: return False
+    
+    try:
+        ws = sh.worksheet(hoja)
+        ws.update_cell(fila, col, valor)
+        celda_a1 = rowcol_to_a1(fila, col)
+        hora_act = datetime.now().strftime("%H:%M")
+        nota = f"📅 {valor} - {hora_act}\n🚛 {vehiculo}\n👷 {st.session_state.user_name}"
+        ws.insert_note(celda_a1, nota)
+        exito_principal = True
+        
+    except Exception as e:
+        st.error(f"❌ Error al escribir en hoja principal: {e}")
+        return False
+        
+    # 2. ESCRITURA EN BACKUP (BEST EFFORT)
+    if archivo_backup and archivo_backup != "":
+        try:
+            sh_bk = conectar_flexible(archivo_backup)
+            if sh_bk:
+                ws_bk = sh_bk.worksheet(hoja)
+                ws_bk.update_cell(fila, col, valor)
+                ws_bk.insert_note(rowcol_to_a1(fila, col), nota)
+                st.toast("Copia de seguridad guardada.")
+        except Exception as e:
+            st.warning(f"⚠️ Falló el Backup: {e}")
 
-    y = h - 90
+    return exito_principal # Devuelve True si el principal guardó OK
+
+# ... (El resto de funciones auxiliares y PDF generator) ...
+
+def guardar_produccion(archivo_prod, hoja_prod, fila, col, valor):
+    sh = conectar_flexible(archivo_prod)
+    if not sh: return False
+    try:
+        ws = sh.worksheet(hoja_prod)
+        ws.update_cell(fila, col, valor)
+        return True
+    except: return False
+
+def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
+    buffer = BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+    _, height = A4
+    start_time, end_time = "________", "________"
+    if trabajadores: start_time, end_time = trabajadores[0]['H_Inicio'], trabajadores[0]['H_Fin']
+
+    y = height - 90
     c.setLineWidth(1); c.rect(40, y - 60, 515, 70) 
-    c.setFont("Helvetica-Bold", 16); c.drawString(50, h - 50, "Daily Work Log - SEMI ISRAEL")
-    c.setFont("Helvetica", 10); c.drawString(400, h - 50, "Israel Railways Project")
+    c.setFont("Helvetica-Bold", 16); c.drawString(50, height - 50, "Daily Work Log - SEMI ISRAEL")
+    c.setFont("Helvetica", 10); c.drawString(400, height - 50, "Israel Railways Project")
     c.setFont("Helvetica-Bold", 10)
-    c.drawString(50, y - 15, f"Date: {fecha}"); c.drawString(250, y - 15, f"Vehicle / Activity: {jefe}")
+    c.drawString(50, y - 15, f"Date: {fecha_str}"); c.drawString(250, y - 15, f"Vehicle / Activity: {jefe}")
     c.drawString(50, y - 45, f"Start Time: {start_time}"); c.drawString(200, y - 45, f"End Time: {end_time}")
     c.drawString(350, y - 45, "Weather: ________")
 
@@ -181,7 +246,7 @@ def generar_pdf(fecha, jefe, lista, para, prod):
     for i, head in enumerate(headers): c.drawString(x_coords[i] + 5, y_cursor + 6, head)
     
     y_cursor -= 20; c.setFillColor(colors.black); c.setFont("Helvetica", 9); y_tabla_start = y - 80
-    for t in lista:
+    for t in trabajadores:
         h_base = 8.0 if t['Total_Horas'] > 8 else t['Total_Horas']
         h_extra = t['Total_Horas'] - 8.0 if t['Total_Horas'] > 8 else 0.0
         col_base = 6 if t['Es_Noche'] else 4
@@ -194,7 +259,7 @@ def generar_pdf(fecha, jefe, lista, para, prod):
         c.setLineWidth(0.5); c.line(40, y_cursor, 555, y_cursor); y_cursor -= 20
         if y_cursor < 200: c.showPage(); y_cursor = h - 50
     
-    y_min = h - 400
+    y_min = height - 400
     while y_cursor > y_min: c.setLineWidth(0.5); c.line(40, y_cursor, 555, y_cursor); y_cursor -= 20
     c.setLineWidth(1)
     for x in x_coords: c.line(x, y_tabla_start + 20, x, y_final - 20)
@@ -258,11 +323,11 @@ with t1:
         c5.text_input("Detalle", value=dv.get(ve, "") if dv else "", disabled=True)
         
         st.divider()
-        fl = st.radio("Filtro", ["TODOS", "OBRA", "ALMACEN"], horizontal=True)
+        filtro = st.radio("Filtro:", ["TODOS", "OBRA", "ALMACEN"], horizontal=True)
         trabs = cargar_trabajadores(ID_ROSTER_ACTIVO)
-        if fl=="ALMACEN": fil=[t for t in trabs if t['tipo']=="ALMACEN"]; def_com=True
-        elif fl=="OBRA": fil=[t for t in trabs if t['tipo']!="ALMACEN"]; def_com=False
-        else: fil=trabs; def_com=False
+        if filtro == "ALMACEN": fil = [t for t in trabs if t['tipo']=="ALMACEN"]; def_com=True
+        elif filtro == "OBRA": fil = [t for t in trabs if t['tipo']!="ALMACEN"]; def_com=False
+        else: fil = trabs; def_com=False
             
         opc = [""] + [t['display'] for t in fil] if fil else ["Sin personal disponible"]
         trab_sel = st.selectbox("Seleccionar Operario", opc)
@@ -273,7 +338,7 @@ with t1:
         turno = ch3.selectbox("Turno", ["AUT", "D", "N"])
         comida = ch4.checkbox("-1h Comida", value=def_com)
         
-        if st.button("➕ AÑADIR A LA LISTA", type="secondary", use_container_width=True):
+        if st.button("➕ AÑADIR A LA LISTA", use_container_width=True, type="secondary"):
             if trab_sel and trab_sel not in ["", "Sin personal disponible"]:
                 t1 = datetime.combine(fecha_sel, h_ini); t2 = datetime.combine(fecha_sel, h_fin)
                 if t2 < t1: t2 += timedelta(days=1)
@@ -281,11 +346,10 @@ with t1:
                 en, tl = False, "D"
                 if turno=="N" or (turno=="AUT" and (h_ini.hour>=21 or h_ini.hour<=4)): en, tl = True, "N"
                 if comida: ht = max(0, ht-1)
-                pid = trab_sel.split(" - ")[0]; pnom = trab_sel.split(" - ")[1]
+                pid = sel_t.split(" - ")[0]; pnom = sel_t.split(" - ")[1]
                 st.session_state.lista_sel.append({"ID":pid, "Nombre":pnom, "Total_Horas":round(ht,2), "Turno_Letra":tl, "H_Inicio":h_ini.strftime("%H:%M"), "H_Fin":h_fin.strftime("%H:%M"), "Es_Noche":en})
         
         if st.session_state.lista_sel:
-            st.markdown("### 📋 Cuadrilla del Día")
             st.dataframe(pd.DataFrame(st.session_state.lista_sel)[["ID","Nombre","Total_Horas","Turno_Letra"]], use_container_width=True)
             if st.button("Borrar Lista"): st.session_state.lista_sel=[]; st.rerun()
             
@@ -304,9 +368,7 @@ with t1:
             elif not ve: st.error("Elige vehículo")
             else:
                 with st.spinner("Guardando..."):
-                    # GUARDADO EN ROSTER PRINCIPAL
                     ok = guardar_parte(fecha_sel, st.session_state.lista_sel, ve, d_para, ID_ROSTER_ACTIVO)
-                    
                     pdf = generar_pdf(str(fecha_sel.date()), ve, st.session_state.lista_sel, d_para, st.session_state.prod)
                     nm = f"Parte_{fecha_sel.date()}_{ve}.pdf"
                     
@@ -329,11 +391,10 @@ with t2:
         conf = cargar_config_prod()
         nom = conf.get(TRAMO_ACTIVO)
         
-        # OBTENEMOS LOS ARCHIVOS
         if isinstance(nom, tuple):
             nom_arch_principal, nom_arch_backup = nom
         else:
-            nom_arch_principal, nom_arch_backup = nom, None
+            nom_arch_principal, nom_arch_backup = nom, None # Si no hay Col C, usa None
         
         hjs = obtener_hojas_track_cached(nom_arch_principal)
         
@@ -353,7 +414,6 @@ with t2:
                         info = datos_completos[it]
                         fr = info['fila_excel']
                         d = info['datos']
-                        
                         st.divider()
                         st.markdown(f"### 📍 {it}")
                         
@@ -383,9 +443,9 @@ with t2:
                         
                         # MENSULA
                         c1, c2 = st.columns([1, 2])
-                        m = f"{safe_val(d,33) or ''} {safe_val(d,34).value or ''}".strip()
+                        m_desc = f"{safe_val(d,33) or ''} {safe_val(d,34) or ''}".strip()
                         fm = safe_val(d, 38)
-                        c1.info(f"Ménsula: {m or '-'}")
+                        c1.info(f"Ménsula: {m_desc or '-'}")
                         if fm: c2.success(f"Hecho: {fm}")
                         elif c2.button("Grabar MENSULA", key="b_men"):
                             guardar_prod_con_nota(nom_arch_principal, hj, fr, 38, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, nom_arch_backup)
@@ -395,26 +455,27 @@ with t2:
                         st.divider()
                         
                         # ANCLAJES
-                        if st.button("Grabar Anclajes", key="b_anc"):
-                            # Usamos el principal como referencia para obtener las columnas de fecha
-                            sh_ref = conectar_flexible(nom_arch_principal)
-                            if sh_ref:
-                                ws_ref = sh_ref.worksheet(hj)
-                                # Lógica para determinar qué columnas escribir
-                                idx_t = [18, 21, 24, 27]; idx_f = [20, 23, 26, 29]
-                                cols_fecha = []
-                                for i in range(4):
-                                    # Si hay un valor en la columna de tipo (Col R, U, X, AA)
-                                    if ws_ref.cell(fr, idx_t[i]).value:
-                                        cols_fecha.append(idx_f[i]) # Columna donde escribir la fecha (T, W, Z, AC)
-                                
-                                if cols_fecha:
-                                    hoy = datetime.now().strftime("%d/%m/%Y")
-                                    # Escribimos en todas las columnas activas (mismo dato, diferente celda)
-                                    for c in cols_fecha:
-                                        guardar_prod_con_nota(nom_arch_principal, hj, fr, c, hoy, st.session_state.veh_glob, ARCHIVO_PROD_BACKUP_ACTIVO)
-                                    
-                                    if it not in st.session_state.prod: st.session_state.prod[it]=[]
-                                    st.session_state.prod[it].append("ANC"); st.rerun()
-                                else:
-                                    st.warning("No hay anclajes definidos para este poste.")
+                        st.write("**Anclajes:**")
+                        cols_t, cols_f = [18, 21, 24, 27], [20, 23, 26, 29]
+                        typs, cols_escritura = [], []
+                        done = False
+                        for i in range(4):
+                            v = safe_val(d, cols_t[i])
+                            if v:
+                                typs.append(str(v))
+                                cols_escritura.append(cols_f[i])
+                                if safe_val(d, cols_f[i]): done = True
+                        
+                        c1, c2 = st.columns([1, 2])
+                        c1.info(f"Tipos: {', '.join(typs) if typs else 'Ninguno'}")
+                        
+                        if not typs: c2.write("-")
+                        elif done: c2.success("✅ Ya registrados")
+                        elif c2.button("Grabar ANCLAJES", key="b_anc"):
+                            hoy = datetime.now().strftime("%d/%m/%Y")
+                            for c_idx in cols_escritura:
+                                # Aquí llamamos a la función de guardado dual para cada columna activa
+                                guardar_prod_con_nota(nom_arch_principal, hj, fr, c_idx, hoy, st.session_state.veh_glob, nom_arch_backup)
+                            
+                            if it not in st.session_state.prod: st.session_state.prod[it]=[]
+                            st.session_state.prod[it].append("ANC"); st.rerun()
