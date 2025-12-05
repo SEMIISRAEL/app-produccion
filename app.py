@@ -533,11 +533,10 @@ with t2:
                     # --- PREPARACIÓN DE LISTAS ---
                     todos_los_items = datos_completos.values()
                     
-                    # 1. LISTA DE PERFILES (Columna A) - RESPETANDO ORDEN FÍSICO DEL EXCEL
-                    # Usamos las llaves del diccionario porque se cargaron en orden de fila
+                    # 1. LISTA DE PERFILES (Columna A) - ORDEN FÍSICO
                     list_perfiles_ordenada = list(datos_completos.keys())
 
-                    # 2. Listas para filtros (Sets para quitar duplicados y ordenar alfabéticamente)
+                    # 2. Listas para filtros
                     list_cim = sorted(list(set(d['datos'][2] for d in todos_los_items if len(d['datos'])>2 and d['datos'][2])))
                     list_post = sorted(list(set(d['datos'][5] for d in todos_los_items if len(d['datos'])>5 and d['datos'][5])))
                     
@@ -570,7 +569,7 @@ with t2:
                             if fil_anc not in vals_a: continue
                         keys_filtradas.append(k)
 
-                    # Selector Principal (Muestra Perfiles de Columna A)
+                    # Selector Principal
                     it = st.selectbox("Perfil a Trabajar", keys_filtradas)
                     
                     if it:
