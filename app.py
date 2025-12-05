@@ -25,13 +25,13 @@ st.set_page_config(page_title="Gestor SEMI - Tablet", layout="wide", page_icon="
 ID_VEHICULOS = "19PWpeCz8pl5NEDpK-omX5AdrLuJgOPrn6uSjtUGomY8"
 ID_CONFIG_PROD = "1uCu5pq6l1CjqXKPEkGkN-G5Z5K00qiV9kR_bGOii6FU"
 
-# === INICIALIZACIÓN GLOBAL DE VARIABLES (FIXED) ===
+# === INICIALIZACIÓN GLOBAL DE VARIABLES ===
 ID_ROSTER_ACTIVO = None
 TRAMO_ACTIVO = None
 ARCHIVO_PROD_ACTIVO = None
+ARCHIVO_PROD_BACKUP_ACTIVO = None
 nombre_roster_sel = "N/A"
 nombre_tramo_sel = "N/A"
-ARCHIVO_PROD_BACKUP_ACTIVO = None
 
 # ==========================================
 #           LOGIN
@@ -42,7 +42,7 @@ def check_login():
         st.session_state.user_role = None
         st.session_state.user_name = None
 
-    if not st.session_state.loggeded_in:
+    if not st.session_state.logged_in:
         st.markdown("<h1 style='text-align: center;'>🔐 Acceso Restringido</h1>", unsafe_allow_html=True)
         c1, c2, c3 = st.columns([1, 2, 1])
         with c2:
@@ -127,8 +127,8 @@ with st.sidebar:
     if conf_prod:
         tramo_sel = st.selectbox("Seleccionar Tramo:", list(conf_prod.keys()), index=None, placeholder="Elige...")
         if tramo_sel:
+            global TRAMO_ACTIVO, ARCHIVO_PROD_ACTIVO, ARCHIVO_PROD_BACKUP_ACTIVO
             TRAMO_ACTIVO = tramo_sel
-            global ARCHIVO_PROD_ACTIVO, ARCHIVO_PROD_BACKUP_ACTIVO # Necesario para reasignar globales
             ARCHIVO_PROD_ACTIVO, ARCHIVO_PROD_BACKUP_ACTIVO = conf_prod.get(tramo_sel)
             st.info(f"📁 {ARCHIVO_PROD_ACTIVO}")
     else:
@@ -225,6 +225,13 @@ def buscar_columna_dia(ws, dia_num):
     if dias_dif < 0: dias_dif += 30
     return 14 + (dias_dif * 2)
 
+@st.cache_data(ttl=600)
+def obtener_hojas_track_cached(nombre_archivo):
+    sh = conectar_flexible(nombre_archivo)
+    if not sh: return None
+    try: return [ws.title for ws in sh.worksheets() if "HR TRACK" in ws.title.upper()]
+    except: return []
+
 # ==========================================
 #          GUARDADO Y ACTUALIZACIONES
 # ==========================================
@@ -285,8 +292,14 @@ def guardar_prod_con_nota(archivo_principal, hoja, fila, col, valor, vehiculo, a
     cargar_datos_completos_hoja.clear() 
     return exito_principal
 
-# ... (El resto de funciones auxiliares) ...
-# ... (Funciones auxiliares: PDF, Email, UI) ...
+def guardar_produccion(archivo_prod, hoja_prod, fila, col, valor):
+    sh = conectar_flexible(archivo_prod)
+    if not sh: return False
+    try:
+        ws = sh.worksheet(hoja_prod)
+        ws.update_cell(fila, col, valor)
+        return True
+    except: return False
 
 # ==========================================
 #          PDF GENERATOR
@@ -341,13 +354,13 @@ def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
         c.setFillColor(colors.black); c.setFont("Helvetica", 10); c.drawString(50, y_bloque - 35, f"{datos_para['inicio']}-{datos_para['fin']} | {datos_para['motivo']}")
         c.setStrokeColor(colors.black); c.setLineWidth(1); y_bloque -= 70
 
-    y_act = y_bloque; alt_act = y_act - 130
+    y_act_top = y_bloque; alt_act = y_act_top - 130
     if alt_act > 20:
-        c.rect(40, 130, 515, alt_act); c.setFont("Helvetica-Bold", 10); c.drawString(50, y_act - 15, "Work Description / Location:")
+        c.rect(40, 130, 515, alt_act); c.setFont("Helvetica-Bold", 10); c.drawString(50, y_act_top - 15, "Work Description / Location:")
         y_line = y_act_top - 35
         if prod_dia:
             c.setFont("Helvetica", 9)
-            for k, v in prod_dia.items():
+            for k,v in prod_dia.items():
                 c.drawString(50, y_line + 5, f"- {k}: {', '.join(v)}"); c.line(40, y_line, 555, y_line); y_line -= 20
         while y_line > 135: c.setLineWidth(0.5); c.line(40, y_line, 555, y_line); y_line -= 20
 
@@ -361,4 +374,104 @@ def enviar_email(pdf, nombre, fecha, jefe):
         if "email" not in st.secrets: return False
         u, p, d = st.secrets["email"]["usuario"], st.secrets["email"]["password"], st.secrets["email"]["destinatario"]
         msg = MIMEMultipart(); msg['Subject']=f"Parte {fecha} {jefe}"; msg['From']=u; msg['To']=d
-        att = MIMEBase('application','octet-stream'); att.set_payload(pdf.
+        att = MIMEBase('application','octet-stream'); att.set_payload(pdf.getvalue()); encoders.encode_base64(att)
+        att.add_header('Content-Disposition',f"attachment; filename={nombre}"); msg.attach(att)
+        s = smtplib.SMTP('smtp.gmail.com',587); s.starttls(); s.login(u,p); s.sendmail(u,d,msg.as_string()); s.quit()
+        return True
+    except: return False
+
+# ==========================================
+#           UI
+# ==========================================
+if 'lista_sel' not in st.session_state: st.session_state.lista_sel = []
+if 'prod_dia' not in st.session_state: st.session_state.prod_dia = {}
+if 'veh_glob' not in st.session_state: st.session_state.veh_glob = None
+
+t1, t2 = st.tabs(["📝 Partes de Trabajo", "🏗️ Producción"])
+
+with t1:
+    st.subheader("Datos Generales")
+    if ID_ROSTER_ACTIVO:
+        c1, c2, c3, c4, c5 = st.columns([1,1,1,2,2])
+        d = c1.selectbox("Día", range(1,32), index=datetime.now().day-1)
+        m = c2.selectbox("Mes", range(1,13), index=datetime.now().month-1)
+        a = c3.selectbox("Año", [2024,2025,2026], index=1)
+        try: fecha_sel = datetime(a,m,d)
+        except: fecha_sel = hoy; st.error("Fecha incorrecta")
+
+        dv = cargar_vehiculos_dict()
+        nv = [""] + list(dv.keys()) if dv else ["Error"]
+        ve = c4.selectbox("Vehículo / Lugar", nv)
+        st.session_state.veh_glob = ve
+        c5.text_input("Detalle", value=dv.get(ve, "") if dv else "", disabled=True)
+        
+        st.divider()
+        filtro = st.radio("Filtro:", ["TODOS", "OBRA", "ALMACEN"], horizontal=True)
+        trabs = cargar_trabajadores(ID_ROSTER_ACTIVO)
+        if filtro == "ALMACEN": fil = [t for t in trabs if t['tipo']=="ALMACEN"]; def_com=True
+        elif filtro == "OBRA": fil = [t for t in trabs if t['tipo']!="ALMACEN"]; def_com=False
+        else: fil = trabs; def_com=False
+            
+        opc = [""] + [t['display'] for t in fil] if fil else ["Sin personal disponible"]
+        trab_sel = st.selectbox("Seleccionar Operario", opc)
+        
+        ch1, ch2, ch3, ch4 = st.columns(4)
+        h_ini = ch1.time_input("Inicio", datetime.strptime("07:00", "%H:%M").time())
+        h_fin = ch2.time_input("Fin", datetime.strptime("16:00", "%H:%M").time())
+        turno = ch3.selectbox("Turno", ["AUT", "D", "N"])
+        comida = ch4.checkbox("-1h Comida", value=def_com)
+        
+        if st.button("➕ AÑADIR", type="secondary", use_container_width=True):
+            if trab_sel and trab_sel not in ["", "Sin personal disponible"]:
+                t1 = datetime.combine(fecha_sel, h_ini); t2 = datetime.combine(fecha_sel, h_fin)
+                if t2 < t1: t2 += timedelta(days=1)
+                ht = (t2-t1).seconds/3600
+                en, tl = False, "D"
+                if turno=="N" or (turno=="AUT" and (h_ini.hour>=21 or h_ini.hour<=4)): en, tl = True, "N"
+                if comida: ht = max(0, ht-1)
+                pid = sel_t.split(" - ")[0]; pnom = sel_t.split(" - ")[1]
+                st.session_state.lista_sel.append({"ID":pid, "Nombre":pnom, "Total_Horas":round(ht,2), "Turno_Letra":tl, "H_Inicio":h_ini.strftime("%H:%M"), "H_Fin":h_fin.strftime("%H:%M"), "Es_Noche":en})
+        
+        if st.session_state.lista_sel:
+            st.dataframe(pd.DataFrame(st.session_state.lista_sel)[["ID","Nombre","Total_Horas","Turno_Letra"]], use_container_width=True)
+            if st.button("Borrar Lista"): st.session_state.lista_sel=[]; st.rerun()
+            
+        st.divider()
+        para = st.checkbox("🛑 Registrar Paralización")
+        d_para = None
+        if para:
+            cp1, cp2, cp3 = st.columns([1,1,2])
+            pi = cp1.time_input("Ini Parada"); pf = cp2.time_input("Fin Parada"); pm = cp3.text_input("Motivo")
+            d1, d2 = datetime.combine(hoy, pi), datetime.combine(hoy, pf)
+            durp = round((d2-d1).seconds/3600, 2)
+            d_para = {"inicio": str(pi), "fin": str(pf), "duracion": durp, "motivo": pm}
+            
+        if st.button("💾 GUARDAR TODO", type="primary", use_container_width=True):
+            if not st.session_state.lista_sel: st.error("Lista vacía")
+            elif not veh_sel: st.error("Elige vehículo")
+            else:
+                with st.spinner("Guardando..."):
+                    ok = guardar_parte(fecha_sel, st.session_state.lista_sel, ve, d_para, ID_ROSTER_ACTIVO)
+                    pdf = generar_pdf(str(fecha_sel.date()), ve, st.session_state.lista_sel, d_para, st.session_state.prod)
+                    nm = f"Parte_{fecha_sel.date()}_{ve}.pdf"
+                    
+                    try:
+                        if "email" in st.secrets: 
+                            enviado = enviar_email(pdf, nm, str(fecha_sel.date()), ve)
+                            ms = "📧 Email enviado"
+                        else: ms = ""
+                    except: ms = "⚠️ Error Email"
+                    
+                    if ok:
+                        st.success(f"✅ Guardado. {ms}")
+                        st.download_button("📥 PDF", pdf, nm, "application/pdf")
+                        st.session_state.lista_sel=[]; st.session_state.prod={}; time.sleep(3); st.rerun()
+
+with t2:
+    if not st.session_state.veh_glob: st.warning("⛔ Elige Vehículo en Pestaña 1")
+    elif not TRAMO_ACTIVO: st.warning("⛔ Elige Tramo en menú lateral")
+    else:
+        conf = cargar_config_prod()
+        nom = conf.get(TRAMO_ACTIVO)
+        
+        if isinstance(nom,
