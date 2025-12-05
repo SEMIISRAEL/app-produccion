@@ -34,7 +34,7 @@ if 'logged_in' not in st.session_state:
     st.session_state.user_role = "encargado"
 
 # Variables Globales
-if 'ID_ROSTER' not in st.session_state: st.session_state.ID_ROSTER = None
+if 'ID_ROSTER_ACTIVO' not in st.session_state: st.session_state.ID_ROSTER_ACTIVO = None
 if 'TRAMO_ACTIVO' not in st.session_state: st.session_state.TRAMO_ACTIVO = None
 if 'ARCH_PROD' not in st.session_state: st.session_state.ARCH_PROD = None
 if 'ARCH_BACKUP' not in st.session_state: st.session_state.ARCH_BACKUP = None
@@ -42,7 +42,7 @@ if 'veh_glob' not in st.session_state: st.session_state.veh_glob = None
 if 'lista_sel' not in st.session_state: st.session_state.lista_sel = []
 if 'prod_dia' not in st.session_state: st.session_state.prod_dia = {}
 
-# VARIABLES PARA CHECKBOXES (IMPORTANTE INICIALIZARLAS)
+# VARIABLES PARA CHECKBOXES
 if 'chk_giros' not in st.session_state: st.session_state.chk_giros = False
 if 'chk_aisl' not in st.session_state: st.session_state.chk_aisl = False
 if 'chk_comp' not in st.session_state: st.session_state.chk_comp = False
@@ -91,7 +91,6 @@ def safe_val(lista, indice):
     if idx_py < len(lista): return lista[idx_py]
     return None
 
-# LECTURA DE NOTA SIN CACHÉ (PARA ACTUALIZAR ESTADO)
 def leer_nota_directa(nombre_archivo, nombre_hoja, fila, col):
     try:
         sh = conectar_flexible(nombre_archivo)
@@ -220,7 +219,9 @@ def guardar_parte(fecha, lista, vehiculo, para, id_roster):
         if upds: ws.update_cells(upds)
         if para:
             try: wp = sh.worksheet("Paralizaciones")
-            except: wp = sh.add_worksheet("Paralizaciones", 1000, 10)
+            except: 
+                wp = sh.add_worksheet("Paralizaciones", 1000, 10)
+                wp.append_row(["Fecha", "Vehiculo/Lugar", "Inicio", "Fin", "Horas", "Motivo", "Usuario"])
             wp.append_row([str(fecha.date()), vehiculo, para['inicio'], para['fin'], para['duracion'], para['motivo'], st.session_state.user_name])
         return True
     except: return False
@@ -367,8 +368,11 @@ with t1:
         c5.text_input("Detalle", value=dv.get(ve, "") if dv else "", disabled=True)
         
         st.divider()
-        filtro = st.radio("Filtro:", ["TODOS", "OBRA", "ALMACEN"], horizontal=True)
-        trabs = cargar_trabajadores(st.session_state.ID_ROSTER_ACTIVO)
+        fl = st.radio("Filtro:", ["TODOS", "OBRA", "ALMACEN"], horizontal=True) # <--- AQUÍ ESTÁ EL CAMBIO (fl)
+        
+        with st.spinner("Actualizando personal..."):
+            trabs = cargar_trabajadores(st.session_state.ID_ROSTER_ACTIVO)
+        
         if fl=="ALMACEN": fil = [t for t in trabs if t['tipo']=="ALMACEN"]; def_com=True
         elif fl=="OBRA": fil = [t for t in trabs if t['tipo']!="ALMACEN"]; def_com=False
         else: fil = trabs; def_com=False
@@ -383,7 +387,7 @@ with t1:
         comida = ch4.checkbox("-1h Comida", value=def_com)
         
         if st.button("➕ AÑADIR", type="secondary", use_container_width=True):
-            if trab_sel and trab_sel not in ["", "Sin personal disponible"]:
+            if trab_sel and trab_sel != "" and trab_sel != "Sin personal disponible":
                 t1 = datetime.combine(fecha_sel, h_ini); t2 = datetime.combine(fecha_sel, h_fin)
                 if t2 < t1: t2 += timedelta(days=1)
                 ht = (t2-t1).seconds/3600
@@ -492,7 +496,6 @@ with t2:
                             if "GIROS FALTAN" in nota: st.session_state.chk_giros = False
                             if "AISLADORES FALTAN" in nota: st.session_state.chk_aisl = False
                             
-                            # Si no faltan cosas y tiene fecha, está completo
                             d = info['datos']
                             fp = safe_val(d, 8)
                             if fp and "FALTAN" not in nota:
@@ -509,60 +512,5 @@ with t2:
                         c1, c2 = st.columns([1, 2])
                         ec, fc = safe_val(d, 3), safe_val(d, 5)
                         c1.info(f"Cim: {ec}")
-                        if fc: c2.success(f"Hecho: {fc}")
-                        elif c2.button("Grabar CIM"):
-                            guardar_prod_con_nota_compleja(nom, hj, fr, 5, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, bk)
-                            if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
-                            st.session_state.prod_dia[it].append("CIM"); st.rerun()
-                        
-                        st.divider()
-                        
-                        # --- SECCIÓN POSTE MEJORADA ---
-                        c1, c2 = st.columns([1, 2])
-                        ep, fp = safe_val(d, 6), safe_val(d, 8)
-                        c1.info(f"Poste: {ep}")
-                        
-                        with c2:
-                            st.write("**Montaje:**")
-                            cc1, cc2, cc3 = st.columns(3)
-                            st.session_state.chk_giros = cc1.checkbox("Giros", value=st.session_state.chk_giros)
-                            st.session_state.chk_aisl = cc2.checkbox("Aisladores", value=st.session_state.chk_aisl)
-                            st.session_state.chk_comp = cc3.checkbox("Completo", value=st.session_state.chk_comp, on_change=on_completo_change)
-                            
-                            if st.button("💾 Grabar POSTE"):
-                                txt = ""
-                                if not st.session_state.chk_giros: txt += "GIROS FALTAN. "
-                                if not st.session_state.chk_aisl: txt += "AISLADORES FALTAN. "
-                                guardar_prod_con_nota_compleja(nom, hj, fr, 8, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, bk, txt)
-                                if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
-                                st.session_state.prod_dia[it].append("POSTE"); st.rerun()
+                        if
 
-                        st.divider()
-                        c1, c2 = st.columns([1, 2])
-                        m_desc = f"{safe_val(d,32) or ''} {safe_val(d,33) or ''}".strip()
-                        fm = safe_val(d, 38)
-                        c1.info(f"Ménsula: {m_desc or '-'}")
-                        if fm: c2.success(f"Hecho: {fm}")
-                        elif c2.button("Grabar MENSULA"):
-                            guardar_prod_con_nota_compleja(nom, hj, fr, 38, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, bk)
-                            if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
-                            st.session_state.prod_dia[it].append("MEN"); st.rerun()
-                        
-                        st.divider()
-                        cols_t, cols_f = [18, 21, 24, 27], [20, 23, 26, 29]
-                        typs, cols_escritura, done = [], [], False
-                        for i in range(4):
-                            v = safe_val(d, cols_t[i])
-                            if v:
-                                typs.append(str(v)); cols_escritura.append(cols_f[i])
-                                if safe_val(d, cols_f[i]): done = True
-                        c1, c2 = st.columns([1, 2])
-                        c1.info(f"Tipos: {', '.join(typs) if typs else 'Ninguno'}")
-                        if not typs: c2.write("-")
-                        elif done: c2.success("✅ Ya registrados")
-                        elif c2.button("Grabar ANCLAJES"):
-                            hoy = datetime.now().strftime("%d/%m/%Y")
-                            for c_idx in cols_escritura:
-                                guardar_prod_con_nota_compleja(nom, hj, fr, c_idx, hoy, st.session_state.veh_glob, bk)
-                            if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
-                            st.session_state.prod_dia[it].append("ANC"); st.rerun()
