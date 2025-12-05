@@ -151,6 +151,32 @@ def cambiar_formato_google(ws, fila, col, tipo_estilo):
     except Exception as e:
         print(f"Error formato: {e}")
         return False
+# ... código anterior ...
+        ws.spreadsheet.batch_update(body)
+        return True
+    except Exception as e:
+        print(f"Error formato: {e}")
+        return False
+
+# --- PEGA AQUÍ LA NUEVA FUNCIÓN ---
+def detectar_estilo_celda(ws, fila, col):
+    """
+    Lee el formato de la celda para descifrar el código secreto.
+    Retorna: "GIROS", "AISLADORES", "NORMAL" o None
+    """
+    try:
+        nombre_hoja = ws.title
+        rango = f"{nombre_hoja}!{rowcol_to_a1(fila, col)}"
+        # ... (resto del código de la función que te pasé) ...
+        return "NORMAL"
+
+# ==========================================
+#       CARGA MASIVA (CACHÉ)
+# ==========================================
+@st.cache_data(ttl=300) 
+def cargar_datos_completos_hoja...
+
+
 
 # ==========================================
 #       CARGA MASIVA (CACHÉ)
@@ -562,33 +588,48 @@ with t2:
                     
                     if it:
                         # RECARGA DE ESTADO DEL POSTE
-                        if st.session_state.last_item_loaded != it:
-                            st.session_state.last_item_loaded = it
-                            info = datos_completos[it]
-                            fr = info['fila_excel']
-                            # Leemos la nota REAL
-                            nota = leer_nota_directa(nom, hj, fr, 8) 
-                            
-                            d = info['datos']
-                            fp = safe_val(d, 8)
-                            
-                            # LÓGICA DE ESTADO V28
-                            # Si hay fecha y NO falta nada -> Completo y Bloqueado
-                            if fp and "FALTAN" not in nota:
-                                st.session_state.chk_comp = True
-                                st.session_state.chk_giros = True
-                                st.session_state.chk_aisl = True
-                            else:
-                                # Si falta algo o no hay fecha, leemos la nota para marcar lo que hay
-                                st.session_state.chk_comp = False
-                                st.session_state.chk_giros = False if "GIROS FALTAN" in nota else True
-                                st.session_state.chk_aisl = False if "AISLADORES FALTAN" in nota else True
-                                
-                                # Caso limpio (Nuevo)
-                                if not fp and not nota:
-                                    st.session_state.chk_giros = False
-                                    st.session_state.chk_aisl = False
+                       st.session_state.last_item_loaded = it
+                        info = datos_completos[it]
+                        fr = info['fila_excel']
+                        d = info['datos']
+                        fp = safe_val(d, 8)
+                        
+                        # --- INICIO DEL NUEVO CEREBRO DEL ROBOT ---
+                        estilo_detectado = "NORMAL"
+                        
+                        # 1. Solo si hay fecha, intentamos leer el color/fuente
+                        if fp: 
+                            try:
+                                sh_temp = conectar_flexible(nom)
+                                ws_temp = sh_temp.worksheet(hj)
+                                # Usamos la función que pegaste en el Paso 1
+                                estilo_detectado = detectar_estilo_celda(ws_temp, fr, 8)
+                            except: pass
 
+                        # 2. Tomamos decisiones basadas en el estilo detectado
+                        if not fp:
+                            # CASO 1: No hay fecha -> Todo pendiente
+                            st.session_state.chk_comp = False
+                            st.session_state.chk_giros = False
+                            st.session_state.chk_aisl = False
+                        
+                        elif estilo_detectado == "NORMAL":
+                            # CASO 2: Fecha normal (Arial) -> TERMINADO BLOQUEADO
+                            st.session_state.chk_comp = True
+                            st.session_state.chk_giros = True
+                            st.session_state.chk_aisl = True
+                            
+                        elif estilo_detectado == "GIROS":
+                            # CASO 3: Courier (Rojo) -> FALTAN GIROS
+                            st.session_state.chk_comp = False
+                            st.session_state.chk_giros = False # Desmarcado para que lo veas
+                            st.session_state.chk_aisl = True
+                            
+                        elif estilo_detectado == "AISLADORES":
+                            # CASO 4: Times (Azul) -> FALTAN AISLADORES
+                            st.session_state.chk_comp = False
+                            st.session_state.chk_giros = True
+                            st.session_state.chk_aisl = False # Desmarcado para que lo veas
                         info = datos_completos[it]
                         fr = info['fila_excel']
                         d = info['datos']
@@ -676,3 +717,4 @@ with t2:
                                 guardar_prod_con_nota_compleja(nom, hj, fr, c_idx, hoy, st.session_state.veh_glob, bk)
                             if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
                             st.session_state.prod_dia[it].append("ANC"); st.rerun()
+
