@@ -505,7 +505,7 @@ with t2:
                     datos_completos = cargar_datos_completos_hoja(nom, hj)
                 
                 if datos_completos:
-                    # --- FILTROS GLOBALES (Se mantienen arriba) ---
+                    # --- FILTROS GLOBALES ---
                     todos_los_items = datos_completos.values()
                     list_cim = sorted(list(set(d['datos'][2] for d in todos_los_items if len(d['datos'])>2 and d['datos'][2])))
                     list_post = sorted(list(set(d['datos'][5] for d in todos_los_items if len(d['datos'])>5 and d['datos'][5])))
@@ -586,11 +586,11 @@ with t2:
                         st.markdown("---")
 
                         # ===========================================================
-                        #       AQUÍ ESTÁ LA NUEVA ORGANIZACIÓN POR PESTAÑAS
+                        #       NUEVA ORGANIZACIÓN DE PESTAÑAS
                         # ===========================================================
                         
-                        # Definimos las pestañas que pediste
-                        tab_cim, tab_pos, tab_her, tab_ten = st.tabs(["🧱 Cimentación", "🗼 Postes", "🛠️ Herrajes", "⚡ Tendidos"])
+                        # 1. Cimentación | 2. Postes y Anclajes | 3. Ménsulas | 4. Tendidos
+                        tab_cim, tab_pos_anc, tab_men, tab_ten = st.tabs(["🧱 Cimentación", "🗼 Postes y Anclajes", "🔧 Ménsulas", "⚡ Tendidos"])
 
                         # --- PESTAÑA 1: CIMENTACIÓN ---
                         with tab_cim:
@@ -606,16 +606,17 @@ with t2:
                                 if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
                                 st.session_state.prod_dia[it].append("CIM"); st.rerun()
 
-                        # --- PESTAÑA 2: POSTES (Con Robot) ---
-                        with tab_pos:
-                            st.subheader("Montaje de Estructura")
+                        # --- PESTAÑA 2: POSTES Y ANCLAJES ---
+                        with tab_pos_anc:
+                            # PARTE A: EL POSTE (CON ROBOT)
+                            st.subheader("1. Estructura (Poste)")
                             c1, c2 = st.columns([1, 2])
                             ep, fp = safe_val(d, 6), safe_val(d, 8)
                             c1.info(f"Tipo Poste: {ep}")
                             
                             if st.session_state.chk_comp and fp:
                                 c2.success(f"✅ TERMINADO: {fp}")
-                                st.info("El poste está bloqueado (Estado: Completo).")
+                                st.info("Poste completo y bloqueado.")
                             else:
                                 with c2:
                                     st.write("**Lista de Chequeo:**")
@@ -641,27 +642,10 @@ with t2:
                                         if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
                                         st.session_state.prod_dia[it].append("POSTE"); st.rerun()
 
-                        # --- PESTAÑA 3: HERRAJES (Ménsulas + Anclajes) ---
-                        with tab_her:
-                            st.subheader("Equipamiento (Ménsulas y Anclajes)")
-                            
-                            # 1. Ménsulas
-                            st.markdown("**1. Ménsulas**")
-                            c1, c2 = st.columns([1, 2])
-                            m_desc = f"{safe_val(d,32) or ''} {safe_val(d,33) or ''}".strip()
-                            fm = safe_val(d, 38)
-                            c1.info(f"Tipo: {m_desc or '-'}")
-                            if fm: 
-                                c2.success(f"Hecho: {fm}")
-                            elif c2.button("Grabar MÉNSULA", use_container_width=True):
-                                guardar_prod_con_nota_compleja(nom, hj, fr, 38, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, bk)
-                                if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
-                                st.session_state.prod_dia[it].append("MEN"); st.rerun()
-                            
                             st.divider()
 
-                            # 2. Anclajes
-                            st.markdown("**2. Anclajes**")
+                            # PARTE B: ANCLAJES (MOVIDO AQUÍ)
+                            st.subheader("2. Anclajes")
                             cols_t, cols_f = [18, 21, 24, 27], [20, 23, 26, 29]
                             typs, cols_escritura, done = [], [], False
                             for i in range(4):
@@ -683,11 +667,22 @@ with t2:
                                 if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
                                 st.session_state.prod_dia[it].append("ANC"); st.rerun()
 
-                        # --- PESTAÑA 4: TENDIDOS (Nueva) ---
+                        # --- PESTAÑA 3: MÉNSULAS ---
+                        with tab_men:
+                            st.subheader("Equipamiento: Ménsulas")
+                            c1, c2 = st.columns([1, 2])
+                            m_desc = f"{safe_val(d,32) or ''} {safe_val(d,33) or ''}".strip()
+                            fm = safe_val(d, 38)
+                            c1.info(f"Tipo: {m_desc or '-'}")
+                            if fm: 
+                                c2.success(f"Hecho: {fm}")
+                            elif c2.button("Grabar MÉNSULA", use_container_width=True):
+                                guardar_prod_con_nota_compleja(nom, hj, fr, 38, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, bk)
+                                if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
+                                st.session_state.prod_dia[it].append("MEN"); st.rerun()
+
+                        # --- PESTAÑA 4: TENDIDOS ---
                         with tab_ten:
                             st.subheader("Fase de Tendido de Cable")
                             st.info("🚧 Sección preparada para futuros datos de Tendido.")
-                            # Aquí pondremos la lógica de columnas de tendido cuando me digas cuáles son.
                             st.text_input("Notas de Tendido (Opcional)", key="nota_tendido")
-                            if st.button("Guardar Nota Tendido"):
-                                st.toast("Nota guardada (Simulación)")
