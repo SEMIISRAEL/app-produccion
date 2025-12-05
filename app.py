@@ -89,25 +89,38 @@ def leer_nota_directa(nombre_archivo, nombre_hoja, fila, col):
 
 def cambiar_formato_google(ws, fila, col, tipo_estilo):
     """
-    LA MANO DEL ROBOT: Escribe usando 'tinta invisible' (formato).
+    LA MANO DEL ROBOT: Escribe formato (Texto y Fondo).
     """
     try:
+        # Configuración por defecto (Normal)
+        formato_texto = {"fontFamily": "Arial", "foregroundColor": {"red": 0.0, "green": 0.0, "blue": 0.0}, "bold": False}
+        formato_fondo = None # Sin fondo
+
         if tipo_estilo == "GIROS":
-            # Courier New + Rojo + Negrita = FALTA GIROS
-            user_format = {"textFormat": {"fontFamily": "Courier New", "foregroundColor": {"red": 1.0, "green": 0.0, "blue": 0.0}, "bold": True}}
+            # Courier + Texto Rojo
+            formato_texto = {"fontFamily": "Courier New", "foregroundColor": {"red": 1.0, "green": 0.0, "blue": 0.0}, "bold": True}
         elif tipo_estilo == "AISLADORES":
-            # Times New Roman + Azul + Negrita = FALTA AISLADORES
-            user_format = {"textFormat": {"fontFamily": "Times New Roman", "foregroundColor": {"red": 0.0, "green": 0.0, "blue": 1.0}, "bold": True}}
-        else:
-            # Arial + Negro = NORMAL (COMPLETO)
-            user_format = {"textFormat": {"fontFamily": "Arial", "foregroundColor": {"red": 0.0, "green": 0.0, "blue": 0.0}, "bold": False}}
+            # Times + Texto Azul
+            formato_texto = {"fontFamily": "Times New Roman", "foregroundColor": {"red": 0.0, "green": 0.0, "blue": 1.0}, "bold": True}
+        elif tipo_estilo == "TENDIDO":
+            # TENDIDO: Texto Negro + FONDO AZUL RELLENO
+            formato_texto = {"fontFamily": "Arial", "foregroundColor": {"red": 0.0, "green": 0.0, "blue": 0.0}, "bold": True}
+            formato_fondo = {"red": 0.6, "green": 0.8, "blue": 1.0} # Azul Cielo
+
+        # Construimos el objeto de formato
+        user_format = {"textFormat": formato_texto}
+        if formato_fondo:
+            user_format["backgroundColor"] = formato_fondo
+
+        # IMPORTANTE: Avisamos a Google que vamos a tocar el Color de Fondo también
+        campos = "userEnteredFormat(textFormat,backgroundColor)"
 
         body = {
             "requests": [{
                 "repeatCell": {
                     "range": {"sheetId": ws.id, "startRowIndex": fila - 1, "endRowIndex": fila, "startColumnIndex": col - 1, "endColumnIndex": col},
                     "cell": {"userEnteredFormat": user_format},
-                    "fields": "userEnteredFormat(textFormat)"
+                    "fields": campos
                 }
             }]
         }
@@ -116,7 +129,6 @@ def cambiar_formato_google(ws, fila, col, tipo_estilo):
     except Exception as e:
         print(f"Error formato: {e}")
         return False
-
 def detectar_estilo_celda(ws, fila, col):
     """
     EL OJO DEL ROBOT: Lee el formato para saber qué falta, aunque haya fecha.
@@ -508,7 +520,7 @@ with t2:
                     # --- PREPARACIÓN DE LISTAS ---
                     todos_los_items = datos_completos.values()
                     
-                    # 1. LISTA DE PERFILES (Columna A) - ORDEN FÍSICO
+                    # 1. LISTA DE PERFILES (Columna A)
                     list_perfiles_ordenada = list(datos_completos.keys())
 
                     # 2. Listas para filtros
@@ -753,7 +765,8 @@ with t2:
                                             guardar_prod_con_nota_compleja(
                                                 nom, hj, fila_real, 39, 
                                                 fecha_tendido, st.session_state.veh_glob, bk, 
-                                                texto_extra=f"Tendido LA-280 [{p_ini} -> {p_fin}]"
+                                                texto_extra=f"Tendido LA-280 [{p_ini} -> {p_fin}]",
+                                                estilo_letra="TENDIDO"
                                             )
                                             contador += 1
                                             barra.progress(int((contador / len(perfiles_a_actualizar)) * 100))
