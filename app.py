@@ -491,43 +491,6 @@ with t1:
                         st.download_button("📥 PDF", pdf, nm, "application/pdf")
                         st.session_state.lista_sel=[]; st.session_state.prod_dia={}; time.sleep(3); st.rerun()
 
-¡Entendido! Ese cambio es fundamental para que el tendido sea correlativo.
-
-En obra lineal (ferrocarril), los Perfiles (Columna A) suelen estar ordenados secuencialmente en el Excel (1+000, 1+020, 1+040...), mientras que los nombres de los postes a veces saltan o se repiten. Usar la Columna A y respetar el orden de las filas del Excel es la forma más segura de hacer un rango "Desde... Hasta".
-
-Aquí tienes el bloque with t2: corregido.
-
-🛠️ Cambios Importantes en esta versión:
-Fuente de Datos: Ahora los desplegables de "Desde" y "Hasta" cargan los datos de la Columna A (Perfiles).
-
-Orden Real: He quitado el sorted() alfabético que desordenaba los kilómetros. Ahora uso list(datos_completos.keys()) para respetar estrictamente el orden físico en el que aparecen en tu hoja de Excel.
-
-Eficiencia: El "Robot" ya no busca uno a uno. Calcula el rango de filas exacto y va directo a grabar, por lo que es mucho más rápido.
-
-Copia y pega este bloque sustituyendo al anterior with t2::
-
-Python
-
-El error SyntaxError: invalid character '¡' ocurre porque has copiado el texto de mi explicación dentro de tu archivo de código. Python no entiende frases como "¡Entendido!...", solo entiende código.
-
-Tienes que borrar esas líneas de texto de tu archivo app.py (alrededor de la línea 494).
-
-Aquí tienes SOLO EL CÓDIGO del bloque with t2:. Cópialo y sustituye tu bloque with t2: antiguo por este. Asegúrate de no pegar texto normal, solo este bloque verde:
-
-Python
-
-Es exactamente el mismo error que antes: has copiado mi frase de confirmación ("¡Entendido!...") dentro del archivo de código.
-
-Python no entiende español, solo entiende código. Esa frase ¡Entendido!... es lo que rompe el programa.
-
-🔴 PASO 1: CORREGIR EL ERROR
-Ve a la línea 494 (o donde te marque el error rojo) y BORRA cualquier texto que sea una frase normal. El código debe empezar directamente con comandos de Python (como with, if, def, etc.).
-
-🟢 PASO 2: EL CÓDIGO LIMPIO
-Para que no te vuelva a pasar, aquí tienes SOLO EL CÓDIGO. No copies nada de lo que estoy escribiendo ahora mismo. Copia ÚNICAMENTE lo que hay dentro del recuadro gris de abajo y sustituye tu bloque with t2: entero por esto.
-
-Python
-
 with t2:
     if not st.session_state.veh_glob: st.warning("⛔ Elige Vehículo en Pestaña 1")
     elif not st.session_state.TRAMO_ACTIVO: st.warning("⛔ Elige Tramo en menú lateral")
