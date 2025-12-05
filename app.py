@@ -26,7 +26,7 @@ ID_VEHICULOS = "19PWpeCz8pl5NEDpK-omX5AdrLuJgOPrn6uSjtUGomY8"
 ID_CONFIG_PROD = "1uCu5pq6l1CjqXKPEkGkN-G5Z5K00qiV9kR_bGOii6FU"
 
 # ==========================================
-#           LOGIN Y ESTADO
+#            LOGIN Y ESTADO
 # ==========================================
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = True
@@ -54,7 +54,7 @@ def on_completo_change():
         st.session_state.chk_aisl = True
 
 # ==========================================
-#           CONEXIÓN
+#            CONEXIÓN
 # ==========================================
 @st.cache_resource
 def get_gspread_client():
@@ -73,7 +73,7 @@ def conectar_flexible(referencia):
             except: return None
 
 # ==========================================
-#      FUNCIONES AUXILIARES (LAS IMPORTANTES)
+#       FUNCIONES AUXILIARES (MODIFICADAS)
 # ==========================================
 
 def safe_val(lista, indice):
@@ -81,18 +81,79 @@ def safe_val(lista, indice):
     if idx_py < len(lista): return lista[idx_py]
     return None
 
-# --- ESTA ES LA FUNCIÓN QUE FALTABA ---
 def leer_nota_directa(nombre_archivo, nombre_hoja, fila, col):
     """Lee la nota de una celda específica para ver pendientes"""
     try:
         sh = conectar_flexible(nombre_archivo)
         ws = sh.worksheet(nombre_hoja)
-        # Llamada API específica para leer la celda y su nota
         return ws.cell(fila, col).note or ""
     except: return ""
 
+# --- NUEVA FUNCIÓN: CAMBIAR FORMATO GOOGLE (INTELIGENCIA DEL ROBOT) ---
+def cambiar_formato_google(ws, fila, col, tipo_estilo):
+    """
+    Aplica el 'Código Secreto' de fuentes en Google Sheets.
+    tipo_estilo: "GIROS", "AISLADORES", "NORMAL"
+    """
+    try:
+        # Definimos los colores y fuentes según tu lógica
+        if tipo_estilo == "GIROS":
+            # Courier New, Rojo, Negrita
+            user_format = {
+                "textFormat": {
+                    "fontFamily": "Courier New",
+                    "foregroundColor": {"red": 1.0, "green": 0.0, "blue": 0.0},
+                    "bold": True
+                }
+            }
+        elif tipo_estilo == "AISLADORES":
+            # Times New Roman, Azul, Negrita
+            user_format = {
+                "textFormat": {
+                    "fontFamily": "Times New Roman",
+                    "foregroundColor": {"red": 0.0, "green": 0.0, "blue": 1.0},
+                    "bold": True
+                }
+            }
+        else:
+            # NORMAL: Arial, Negro, Normal
+            user_format = {
+                "textFormat": {
+                    "fontFamily": "Arial",
+                    "foregroundColor": {"red": 0.0, "green": 0.0, "blue": 0.0},
+                    "bold": False
+                }
+            }
+
+        # Construimos la petición JSON para la API de Google
+        body = {
+            "requests": [
+                {
+                    "repeatCell": {
+                        "range": {
+                            "sheetId": ws.id,
+                            "startRowIndex": fila - 1,
+                            "endRowIndex": fila,
+                            "startColumnIndex": col - 1,
+                            "endColumnIndex": col
+                        },
+                        "cell": {
+                            "userEnteredFormat": user_format
+                        },
+                        "fields": "userEnteredFormat(textFormat)"
+                    }
+                }
+            ]
+        }
+        # Enviamos la actualización de formato
+        ws.spreadsheet.batch_update(body)
+        return True
+    except Exception as e:
+        print(f"Error formato: {e}")
+        return False
+
 # ==========================================
-#      CARGA MASIVA (CACHÉ)
+#       CARGA MASIVA (CACHÉ)
 # ==========================================
 @st.cache_data(ttl=300) 
 def cargar_datos_completos_hoja(nombre_archivo, nombre_hoja):
@@ -111,7 +172,7 @@ def cargar_datos_completos_hoja(nombre_archivo, nombre_hoja):
     except: return None
 
 # ==========================================
-#      SIDEBAR
+#       SIDEBAR
 # ==========================================
 @st.cache_data(ttl=300)
 def buscar_archivos_roster():
@@ -171,7 +232,7 @@ with st.sidebar:
         st.warning("Sin config producción")
 
 # ==========================================
-#      CARGAS DATOS AUXILIARES
+#       CARGAS DATOS AUXILIARES
 # ==========================================
 @st.cache_data(ttl=600)
 def cargar_vehiculos_dict():
@@ -215,7 +276,7 @@ def obtener_hojas_track_cached(nombre_archivo):
     except: return []
 
 # ==========================================
-#      GUARDADO Y EMAIL
+#       GUARDADO Y EMAIL (ACTUALIZADO CON ESTILOS)
 # ==========================================
 def guardar_parte(fecha, lista, vehiculo, para, id_roster):
     sh = conectar_flexible(id_roster)
@@ -242,7 +303,11 @@ def guardar_parte(fecha, lista, vehiculo, para, id_roster):
         return True
     except: return False
 
-def guardar_prod_con_nota_compleja(archivo_principal, hoja, fila, col, valor, vehiculo, archivo_backup, texto_extra=""):
+# --- FUNCIÓN DE GUARDADO PRINCIPAL (MODIFICADA) ---
+def guardar_prod_con_nota_compleja(archivo_principal, hoja, fila, col, valor, vehiculo, archivo_backup, texto_extra="", estilo_letra=None):
+    """
+    estilo_letra: Recibe "GIROS", "AISLADORES" o None (para normal)
+    """
     exito_principal = False
     sh = conectar_flexible(archivo_principal)
     if not sh: return False
@@ -255,6 +320,14 @@ def guardar_prod_con_nota_compleja(archivo_principal, hoja, fila, col, valor, ve
         if texto_extra:
             nota += f"\n⚠️ PENDIENTE: {texto_extra}"
         ws.insert_note(celda_a1, nota)
+        
+        # --- APLICAMOS EL ESTILO SECRETO AQUÍ ---
+        if estilo_letra:
+            cambiar_formato_google(ws, fila, col, estilo_letra)
+        else:
+            # Si no hay estilo específico, aseguramos que sea normal
+            cambiar_formato_google(ws, fila, col, "NORMAL")
+            
         exito_principal = True
     except Exception as e:
         st.error(f"❌ Error Principal: {e}")
@@ -267,13 +340,15 @@ def guardar_prod_con_nota_compleja(archivo_principal, hoja, fila, col, valor, ve
                 ws_bk = sh_bk.worksheet(hoja)
                 ws_bk.update_cell(fila, col, valor)
                 ws_bk.insert_note(rowcol_to_a1(fila, col), nota)
+                # Opcional: Aplicar formato al backup también
+                if estilo_letra: cambiar_formato_google(ws_bk, fila, col, estilo_letra)
         except: pass
 
     cargar_datos_completos_hoja.clear() 
     return exito_principal
 
 # ==========================================
-#      PDF GENERATOR
+#       PDF GENERATOR (SIN CAMBIOS)
 # ==========================================
 def generar_pdf(fecha, jefe, lista, para, prod):
     b = BytesIO()
@@ -314,8 +389,9 @@ def generar_pdf(fecha, jefe, lista, para, prod):
     y_min = h - 400
     while y_cursor > y_min: c.setLineWidth(0.5); c.line(40, y_cursor, 555, y_cursor); y_cursor -= 20
     c.setLineWidth(1)
-    for x in x_coords: c.line(x, y_tabla_start + 20, x, y_final - 20)
-    c.line(555, y_tabla_start + 20, 555, y_final - 20) 
+    y_final = y_cursor # Definimos y_final aquí
+    for x in x_coords: c.line(x, y_tabla_start + 20, x, y_final - 0) # Ajuste visual
+    c.line(555, y_tabla_start + 20, 555, y_final - 0) 
 
     y_bloque = y_final - 40
     if para:
@@ -350,7 +426,7 @@ def enviar_email(pdf, nombre, fecha, jefe):
     except: return False
 
 # ==========================================
-#           UI
+#            UI
 # ==========================================
 if 'lista_sel' not in st.session_state: st.session_state.lista_sel = []
 if 'prod_dia' not in st.session_state: st.session_state.prod_dia = {}
@@ -530,7 +606,7 @@ with t2:
                         
                         st.divider()
                         
-                        # --- SECCIÓN POSTE INTELIGENTE ---
+                        # --- SECCIÓN POSTE INTELIGENTE (MODIFICADA) ---
                         c1, c2 = st.columns([1, 2])
                         ep, fp = safe_val(d, 6), safe_val(d, 8)
                         c1.info(f"Poste: {ep}")
@@ -550,10 +626,23 @@ with t2:
                                 
                                 if st.button("💾 Grabar POSTE"):
                                     txt = ""
-                                    if not st.session_state.chk_giros: txt += "GIROS FALTAN. "
-                                    if not st.session_state.chk_aisl: txt += "AISLADORES FALTAN. "
+                                    # LÓGICA DE ESTILO PARA EL ROBOT
+                                    estilo_a_aplicar = "NORMAL" # Por defecto
                                     
-                                    guardar_prod_con_nota_compleja(nom, hj, fr, 8, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, bk, txt)
+                                    if not st.session_state.chk_giros:
+                                        txt += "GIROS FALTAN. "
+                                        estilo_a_aplicar = "GIROS" # Código 'a' (Courier/Rojo)
+                                        
+                                    if not st.session_state.chk_aisl:
+                                        txt += "AISLADORES FALTAN. "
+                                        # Si faltan AMBOS, priorizamos AISLADORES (o puedes cambiarlo)
+                                        # O si prefieres que Giros gane, cambia el orden
+                                        estilo_a_aplicar = "AISLADORES" # Código 'b' (Times/Azul)
+                                    
+                                    if st.session_state.chk_comp:
+                                        estilo_a_aplicar = "NORMAL"
+
+                                    guardar_prod_con_nota_compleja(nom, hj, fr, 8, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, bk, txt, estilo_letra=estilo_a_aplicar)
                                     if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
                                     st.session_state.prod_dia[it].append("POSTE"); st.rerun()
 
