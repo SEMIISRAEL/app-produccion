@@ -18,21 +18,20 @@ from email.mime.text import MIMEText
 from email import encoders
 from gspread.utils import rowcol_to_a1
 
-# ==========================================
-# --- 🛑 ZONA DE CONFIGURACIÓN GLOBAL (FIX V18) 🛑 ---
-# ==========================================
-# 1. IDs FIJOS (CONSTANTES)
-ID_ROSTER = "1ezFvpyTzkL98DJjpXeeGuqbMy_kTZItUC9FDkxFlD08"
+# --- CONFIGURACIÓN ---
+st.set_page_config(page_title="Gestor SEMI - Tablet", layout="wide", page_icon="🏗️")
+
+# --- IDs FIJOS ---
 ID_VEHICULOS = "19PWpeCz8pl5NEDpK-omX5AdrLuJgOPrn6uSjtUGomY8"
 ID_CONFIG_PROD = "1uCu5pq6l1CjqXKPEkGkN-G5Z5K00qiV9kR_bGOii6FU"
 
-# 2. VARIABLES GLOBALES DE SESIÓN (INIT)
+# === INICIALIZACIÓN GLOBAL DE VARIABLES (FIXED) ===
 ID_ROSTER_ACTIVO = None
 TRAMO_ACTIVO = None
 ARCHIVO_PROD_ACTIVO = None
-
-# 3. CONFIG DE PÁGINA
-st.set_page_config(page_title="Gestor SEMI - Tablet", layout="wide", page_icon="🏗️")
+nombre_roster_sel = "N/A"
+nombre_tramo_sel = "N/A"
+ARCHIVO_PROD_BACKUP_ACTIVO = None
 
 # ==========================================
 #           LOGIN
@@ -43,7 +42,7 @@ def check_login():
         st.session_state.user_role = None
         st.session_state.user_name = None
 
-    if not st.session_state.logged_in:
+    if not st.session_state.loggeded_in:
         st.markdown("<h1 style='text-align: center;'>🔐 Acceso Restringido</h1>", unsafe_allow_html=True)
         c1, c2, c3 = st.columns([1, 2, 1])
         with c2:
@@ -104,7 +103,7 @@ with st.sidebar:
         st.rerun()
     st.markdown("---")
     
-    # --- 1. ROSTER ---
+    # 1. ROSTER
     st.caption("📅 ROSTER ACTIVO")
     archivos_roster = buscar_archivos_roster()
     
@@ -121,17 +120,15 @@ with st.sidebar:
     
     st.markdown("---")
 
-    # --- 2. TRAMO ---
+    # 2. TRAMO
     st.caption("🏗️ PROYECTO / TRAMO")
     conf_prod = cargar_config_prod()
     
     if conf_prod:
         tramo_sel = st.selectbox("Seleccionar Tramo:", list(conf_prod.keys()), index=None, placeholder="Elige...")
         if tramo_sel:
-            # USAMOS VARIABLES GLOBALES
             TRAMO_ACTIVO = tramo_sel
-            global ARCHIVO_PROD_ACTIVO # Necesario para reasignar variable global
-            global ARCHIVO_PROD_BACKUP_ACTIVO
+            global ARCHIVO_PROD_ACTIVO, ARCHIVO_PROD_BACKUP_ACTIVO # Necesario para reasignar globales
             ARCHIVO_PROD_ACTIVO, ARCHIVO_PROD_BACKUP_ACTIVO = conf_prod.get(tramo_sel)
             st.info(f"📁 {ARCHIVO_PROD_ACTIVO}")
     else:
@@ -153,7 +150,7 @@ def conectar_flexible(referencia):
     except:
         try: return client.open(referencia)
         except:
-            try: return client.open(referencia.replace(".xlsx", ""))
+            try: return client.open(referencia.replace(".xlsx", "").strip())
             except: return None
 
 # ==========================================
@@ -191,7 +188,7 @@ def cargar_vehiculos_dict():
         return {r[0]: (r[1] if len(r)>1 else "") for r in sh.sheet1.get_all_values() if r and r[0] and "veh" not in r[0].lower()}
     except: return {}
 
-def cargar_trabajadores_disponibles(fecha_dt, id_roster):
+def cargar_trabajadores(id_roster):
     if not id_roster: return []
     sh = conectar_flexible(id_roster)
     if not sh: return []
@@ -219,9 +216,6 @@ def cargar_trabajadores_disponibles(fecha_dt, id_roster):
         return lista
     except: return []
 
-# ==========================================
-#          GUARDADO Y ACTUALIZACIONES
-# ==========================================
 def buscar_columna_dia(ws, dia_num):
     header_rows = ws.get_values("E4:AX9") 
     for r_idx, row in enumerate(header_rows):
@@ -231,6 +225,9 @@ def buscar_columna_dia(ws, dia_num):
     if dias_dif < 0: dias_dif += 30
     return 14 + (dias_dif * 2)
 
+# ==========================================
+#          GUARDADO Y ACTUALIZACIONES
+# ==========================================
 def guardar_parte(fecha, lista, vehiculo, para, id_roster):
     sh = conectar_flexible(id_roster)
     if not sh: return False
@@ -288,6 +285,9 @@ def guardar_prod_con_nota(archivo_principal, hoja, fila, col, valor, vehiculo, a
     cargar_datos_completos_hoja.clear() 
     return exito_principal
 
+# ... (El resto de funciones auxiliares) ...
+# ... (Funciones auxiliares: PDF, Email, UI) ...
+
 # ==========================================
 #          PDF GENERATOR
 # ==========================================
@@ -325,4 +325,40 @@ def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
         c.drawString(x_coords[3]+5, y_cursor+6, "Official")
         c.drawString(x_coords[col_base]+10, y_cursor+6, f"{h_base:g}")
         if h_extra > 0: c.drawString(x_coords[5]+10, y_cursor+6, f"{h_extra:g}")
-        c.setLineWidth(0.5); c.line(40, y_
+        c.setLineWidth(0.5); c.line(40, y_cursor, 555, y_cursor); y_cursor -= 20
+        if y_cursor < 200: c.showPage(); y_cursor = h - 50
+    
+    y_min = height - 400
+    while y_cursor > y_min: c.setLineWidth(0.5); c.line(40, y_cursor, 555, y_cursor); y_cursor -= 20
+    c.setLineWidth(1)
+    for x in x_coords: c.line(x, y_tabla_start + 20, x, y_final - 20)
+    c.line(555, y_tabla_start + 20, 555, y_final - 20) 
+
+    y_bloque = y_final - 40
+    if datos_para:
+        c.setStrokeColor(colors.red); c.setLineWidth(2); c.rect(40, y_bloque - 50, 515, 50)
+        c.setFillColor(colors.red); c.setFont("Helvetica-Bold", 10); c.drawString(50, y_bloque - 15, "⚠️ CLIENT DELAY / PARALIZACIÓN")
+        c.setFillColor(colors.black); c.setFont("Helvetica", 10); c.drawString(50, y_bloque - 35, f"{datos_para['inicio']}-{datos_para['fin']} | {datos_para['motivo']}")
+        c.setStrokeColor(colors.black); c.setLineWidth(1); y_bloque -= 70
+
+    y_act = y_bloque; alt_act = y_act - 130
+    if alt_act > 20:
+        c.rect(40, 130, 515, alt_act); c.setFont("Helvetica-Bold", 10); c.drawString(50, y_act - 15, "Work Description / Location:")
+        y_line = y_act_top - 35
+        if prod_dia:
+            c.setFont("Helvetica", 9)
+            for k, v in prod_dia.items():
+                c.drawString(50, y_line + 5, f"- {k}: {', '.join(v)}"); c.line(40, y_line, 555, y_line); y_line -= 20
+        while y_line > 135: c.setLineWidth(0.5); c.line(40, y_line, 555, y_line); y_line -= 20
+
+    c.setLineWidth(1); c.rect(40, 30, 515, 90); c.setFont("Helvetica-Bold", 10)
+    c.drawString(50, 100, "Machinery / Materials:"); c.line(40, 70, 555, 70)
+    c.drawString(50, 50, "SIGNATURE (ENCARGADO): __________________________")
+    c.save(); buffer.seek(0); return buffer
+
+def enviar_email(pdf, nombre, fecha, jefe):
+    try:
+        if "email" not in st.secrets: return False
+        u, p, d = st.secrets["email"]["usuario"], st.secrets["email"]["password"], st.secrets["email"]["destinatario"]
+        msg = MIMEMultipart(); msg['Subject']=f"Parte {fecha} {jefe}"; msg['From']=u; msg['To']=d
+        att = MIMEBase('application','octet-stream'); att.set_payload(pdf.
