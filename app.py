@@ -33,7 +33,7 @@ if 'logged_in' not in st.session_state:
     st.session_state.user_name = "Usuario Tablet"
     st.session_state.user_role = "encargado"
 
-# Variables Globales
+# Globales
 if 'ID_ROSTER_ACTIVO' not in st.session_state: st.session_state.ID_ROSTER_ACTIVO = None
 if 'TRAMO_ACTIVO' not in st.session_state: st.session_state.TRAMO_ACTIVO = None
 if 'ARCH_PROD' not in st.session_state: st.session_state.ARCH_PROD = None
@@ -42,16 +42,22 @@ if 'veh_glob' not in st.session_state: st.session_state.veh_glob = None
 if 'lista_sel' not in st.session_state: st.session_state.lista_sel = []
 if 'prod_dia' not in st.session_state: st.session_state.prod_dia = {}
 
-# VARIABLES CHECKBOXES
+# ESTADO DE LA UI (CHECKBOXES)
 if 'chk_giros' not in st.session_state: st.session_state.chk_giros = False
 if 'chk_aisl' not in st.session_state: st.session_state.chk_aisl = False
 if 'chk_comp' not in st.session_state: st.session_state.chk_comp = False
-if 'last_item_loaded' not in st.session_state: st.session_state.last_item_loaded = None
+if 'current_item_key' not in st.session_state: st.session_state.current_item_key = None
+if 'force_reload' not in st.session_state: st.session_state.force_reload = False
 
+# Callback para sincronizar checkboxes
 def on_completo_change():
     if st.session_state.chk_comp:
         st.session_state.chk_giros = True
         st.session_state.chk_aisl = True
+    else:
+        # Si desmarcan completo, no desmarcamos los otros por seguridad,
+        # el usuario debe desmarcarlos manualmente si quiere.
+        pass
 
 # ==========================================
 #           CONEXIÓN
@@ -73,62 +79,23 @@ def conectar_flexible(referencia):
             except: return None
 
 # ==========================================
-#      FUNCIONES AUXILIARES (COLORES Y NOTAS)
+#      LECTURA INTELIGENTE (NOTA + FECHA)
 # ==========================================
-def safe_val(lista, indice):
-    idx_py = indice - 1
-    if idx_py < len(lista): return lista[idx_py]
-    return None
-
-def leer_nota_directa(nombre_archivo, nombre_hoja, fila, col):
+# Esta función lee UNA celda específica para obtener su valor y su nota.
+# Es vital para saber el estado real del poste.
+def obtener_estado_poste(nombre_archivo, nombre_hoja, fila, col):
     try:
         sh = conectar_flexible(nombre_archivo)
         ws = sh.worksheet(nombre_hoja)
-        return ws.cell(fila, col).note or ""
-    except: return ""
-
-# --- DETECCIÓN DE COLOR AMARILLO (VISIÓN DE ROBOT) ---
-def obtener_indices_amarillos(sh, nombre_hoja):
-    """Devuelve una lista de índices (0-based respecto a la lectura) que tienen fondo amarillo en Col B"""
-    amarillos = []
-    try:
-        # Llamada a la API de bajo nivel para ver formatos
-        hoja = sh.worksheet(nombre_hoja)
-        id_hoja = hoja.id
-        
-        # Leemos formato de la columna B (índice 1) desde la fila 9 hasta la 300 (aprox)
-        # Esto es para no sobrecargar. Ajustar si tienes más de 300 empleados.
-        url = f"https://sheets.googleapis.com/v4/spreadsheets/{sh.id}/get"
-        params = {
-            'ranges': f"{nombre_hoja}!B9:B300",
-            'fields': "sheets(data(rowData(values(userEnteredFormat(backgroundColor)))))"
-        }
-        res = sh.client.request("get", url, params=params).json()
-        
-        # Procesamos la respuesta JSON
-        filas_data = res['sheets'][0]['data'][0].get('rowData', [])
-        
-        for i, row in enumerate(filas_data):
-            values = row.get('values', [])
-            if values:
-                celda = values[0] # Columna B
-                fmt = celda.get('userEnteredFormat', {}).get('backgroundColor', {})
-                # El amarillo puro es R=1, G=1, B=0. Damos un margen.
-                r = fmt.get('red', 0)
-                g = fmt.get('green', 0)
-                b = fmt.get('blue', 0)
-                
-                # Si es "bastante amarillo"
-                if r > 0.9 and g > 0.9 and b < 0.5:
-                    amarillos.append(i) # Índice relativo al rango B9:B...
-                    
-    except Exception as e:
-        print(f"Error leyendo colores: {e}")
-        
-    return amarillos
+        celda = ws.cell(fila, col) # Llamada API
+        valor = celda.value
+        nota = celda.note
+        return valor, nota
+    except:
+        return None, None
 
 # ==========================================
-#      CARGA MASIVA
+#      CARGA MASIVA (LISTAS)
 # ==========================================
 @st.cache_data(ttl=300) 
 def cargar_datos_completos_hoja(nombre_archivo, nombre_hoja):
@@ -145,6 +112,11 @@ def cargar_datos_completos_hoja(nombre_archivo, nombre_hoja):
                 datos_procesados[item_id] = {"fila_excel": i + 1, "datos": fila}
         return datos_procesados
     except: return None
+
+def safe_val(lista, indice):
+    idx_py = indice - 1
+    if idx_py < len(lista): return lista[idx_py]
+    return None
 
 # ==========================================
 #      SIDEBAR
@@ -194,10 +166,8 @@ with st.sidebar:
     else: st.error("No hay Rosters.")
     
     st.markdown("---")
-    # 2. TRAMO
     st.caption("🏗️ PROYECTO / TRAMO")
     conf_prod = cargar_config_prod()
-    
     if conf_prod:
         tramo_sel = st.selectbox("Seleccionar Tramo:", list(conf_prod.keys()), index=None, placeholder="Elige...")
         if tramo_sel:
@@ -223,18 +193,8 @@ def cargar_trabajadores(id_roster):
     sh = conectar_flexible(id_roster)
     if not sh: return []
     try:
-        # Intentamos obtener la hoja Roster
-        try: ws = sh.worksheet("Roster")
-        except: ws = sh.sheet1
-            
+        ws = sh.sheet1 if "Roster" not in [w.title for w in sh.worksheets()] else sh.worksheet("Roster")
         datos = ws.get_all_values()
-        
-        # --- DETECCIÓN DE COLORES (NUEVO) ---
-        # Llamamos a la función que escanea colores en la columna B
-        # Nombre de la hoja actual
-        nombre_hoja_roster = ws.title
-        indices_amarillos = obtener_indices_amarillos(sh, nombre_hoja_roster)
-        
         lista = []
         col_dia = 14 
         hoy_dia = str(datetime.now().day)
@@ -242,23 +202,13 @@ def cargar_trabajadores(id_roster):
             if r < len(datos) and hoy_dia in datos[r]: 
                 col_dia = datos[r].index(hoy_dia)
                 break
-        
-        # Iteramos datos (los datos empiezan en fila 9, índice 8)
-        for i, fila in enumerate(datos[8:]):
+        for fila in datos[8:]:
             if len(fila) < 2: continue
             uid, nom = str(fila[0]).strip(), str(fila[1]).strip()
             if not uid or "id" in uid.lower(): continue
-            
-            # Filtro: ¿Ya fichó?
             if len(fila) > col_dia and fila[col_dia]: continue 
-            
-            # Filtro Tipo: Por Color
-            # El índice 'i' es relativo a datos[8:]. 
-            # Nuestra función de colores escaneó desde B9, así que los índices coinciden (0 = Fila 9)
             tipo = "OBRA"
-            if i in indices_amarillos:
-                tipo = "ALMACEN"
-            
+            if len(fila) > 2 and ("A" == str(fila[2]).upper() or "ALMACEN" in str(fila[2]).upper()): tipo = "ALMACEN"
             lista.append({"display": f"{uid} - {nom}", "tipo": tipo, "id": uid, "nombre_solo": nom})
         return lista
     except: return []
@@ -271,7 +221,7 @@ def obtener_hojas_track_cached(nombre_archivo):
     except: return []
 
 # ==========================================
-#      GUARDADO Y EMAIL
+#      GUARDADO
 # ==========================================
 def guardar_parte(fecha, lista, vehiculo, para, id_roster):
     sh = conectar_flexible(id_roster)
@@ -291,9 +241,7 @@ def guardar_parte(fecha, lista, vehiculo, para, id_roster):
         if upds: ws.update_cells(upds)
         if para:
             try: wp = sh.worksheet("Paralizaciones")
-            except: 
-                wp = sh.add_worksheet("Paralizaciones", 1000, 10)
-                wp.append_row(["Fecha", "Vehiculo/Lugar", "Inicio", "Fin", "Horas", "Motivo", "Usuario"])
+            except: wp = sh.add_worksheet("Paralizaciones", 1000, 10)
             wp.append_row([str(fecha.date()), vehiculo, para['inicio'], para['fin'], para['duracion'], para['motivo'], st.session_state.user_name])
         return True
     except: return False
@@ -307,13 +255,10 @@ def guardar_prod_con_nota_compleja(archivo_principal, hoja, fila, col, valor, ve
         ws.update_cell(fila, col, valor)
         celda_a1 = rowcol_to_a1(fila, col)
         hora_act = datetime.now().strftime("%H:%M")
-        
-        # NOTA INTELIGENTE
         nota = f"📅 {valor} - {hora_act}\n🚛 {vehiculo}\n👷 {st.session_state.user_name}"
         if texto_extra:
             nota += f"\n⚠️ PENDIENTE: {texto_extra}"
-        else:
-            nota += "\n✅ COMPLETO"
+        # Si no hay texto extra, NO ponemos nada más (se asume completo por defecto)
             
         ws.insert_note(celda_a1, nota)
         exito_principal = True
@@ -330,7 +275,7 @@ def guardar_prod_con_nota_compleja(archivo_principal, hoja, fila, col, valor, ve
                 ws_bk.insert_note(rowcol_to_a1(fila, col), nota)
         except: pass
 
-    cargar_datos_completos_hoja.clear() 
+    st.session_state.force_reload = True # Forzar recarga en siguiente ciclo
     return exito_principal
 
 # ==========================================
@@ -438,16 +383,10 @@ with t1:
         
         st.divider()
         fl = st.radio("Filtro:", ["TODOS", "OBRA", "ALMACEN"], horizontal=True)
-        
-        with st.spinner("Cargando y filtrando..."):
-            trabs = cargar_trabajadores(st.session_state.ID_ROSTER_ACTIVO)
-        
-        if fl == "ALMACEN": 
-            fil = [t for t in trabs if t['tipo']=="ALMACEN"]; def_com=True
-        elif fl == "OBRA": 
-            fil = [t for t in trabs if t['tipo']!="ALMACEN"]; def_com=False
-        else: 
-            fil = trabs; def_com=False
+        trabs = cargar_trabajadores(st.session_state.ID_ROSTER_ACTIVO)
+        if fl=="ALMACEN": fil = [t for t in trabs if t['tipo']=="ALMACEN"]; def_com=True
+        elif fl=="OBRA": fil = [t for t in trabs if t['tipo']!="ALMACEN"]; def_com=False
+        else: fil = trabs; def_com=False
             
         opc = [""] + [t['display'] for t in fil] if fil else ["Sin personal disponible"]
         trab_sel = st.selectbox("Seleccionar Operario", opc)
@@ -514,66 +453,58 @@ with t2:
             hj = st.selectbox("Hoja", hjs, index=None)
             if hj:
                 with st.spinner("Cargando..."):
+                    # Recargamos si hubo cambio forzado (guardado reciente)
+                    if st.session_state.get("force_reload", False):
+                        cargar_datos_completos_hoja.clear()
+                        st.session_state.force_reload = False
+                        
                     datos_completos = cargar_datos_completos_hoja(nom, hj)
                 
                 if datos_completos:
-                    # FILTROS
-                    todos_los_items = datos_completos.values()
-                    list_cim = sorted(list(set(d['datos'][2] for d in todos_los_items if len(d['datos'])>2 and d['datos'][2])))
-                    list_post = sorted(list(set(d['datos'][5] for d in todos_los_items if len(d['datos'])>5 and d['datos'][5])))
-                    set_anc = set()
-                    for d in todos_los_items:
-                        row = d['datos']
-                        for idx in [17, 20, 23, 26]:
-                            if len(row) > idx and row[idx]: set_anc.add(row[idx])
-                    list_anc = sorted(list(set_anc))
-
-                    c_f1, c_f2, c_f3 = st.columns(3)
-                    fil_cim = c_f1.selectbox("Filtro Cimentación", ["Todos"] + list_cim)
-                    fil_post = c_f2.selectbox("Filtro Poste", ["Todos"] + list_post)
-                    fil_anc = c_f3.selectbox("Filtro Anclaje", ["Todos"] + list_anc)
-                    fil_km = st.text_input("Filtro Km")
-
-                    keys_filtradas = []
-                    for k, info in datos_completos.items():
-                        row = info['datos']
-                        if fil_km and fil_km not in str(k): continue
-                        if fil_cim != "Todos":
-                            val_c = row[2] if len(row)>2 else ""
-                            if val_c != fil_cim: continue
-                        if fil_post != "Todos":
-                            val_p = row[5] if len(row)>5 else ""
-                            if val_p != fil_post: continue
-                        if fil_anc != "Todos":
-                            vals_a = [row[i] for i in [17,20,23,26] if len(row)>i]
-                            if fil_anc not in vals_a: continue
-                        keys_filtradas.append(k)
-
-                    it = st.selectbox("Elemento", keys_filtradas)
+                    fil = st.text_input("Filtro Km")
+                    keys = list(datos_completos.keys())
+                    if fil: keys = [k for k in keys if fil in str(k)]
+                    it = st.selectbox("Elemento", keys)
                     
                     if it:
-                        # RECARGA DE ESTADO DEL POSTE
-                        if st.session_state.last_item_loaded != it:
-                            st.session_state.last_item_loaded = it
+                        # --- LÓGICA MAESTRA DE ESTADO ---
+                        # Detectamos si cambiamos de item PARA LEER ESTADO INICIAL
+                        if st.session_state.current_item_key != it:
+                            st.session_state.current_item_key = it
+                            
                             info = datos_completos[it]
                             fr = info['fila_excel']
-                            nota = leer_nota_directa(nom, hj, fr, 8)
+                            
+                            # LEER NOTA REAL (API CALL)
+                            nota = leer_nota_directa(nom, hj, fr, 8) # Col 8 = POSTE
                             
                             d = info['datos']
-                            fp = safe_val(d, 8)
+                            fp = safe_val(d, 8) # Fecha poste
                             
+                            # DETERMINAR ESTADO
+                            # 1. ¿Está terminado de verdad? (Fecha existe + No hay "FALTAN" en nota)
+                            es_completo = False
                             if fp and "FALTAN" not in nota:
+                                es_completo = True
+                            
+                            # 2. Asignar Checkboxes
+                            if es_completo:
                                 st.session_state.chk_comp = True
                                 st.session_state.chk_giros = True
                                 st.session_state.chk_aisl = True
                             else:
                                 st.session_state.chk_comp = False
+                                # Si la nota dice que falta, False. Si no dice nada y no es completo, True (por defecto al entrar se asume que vas a montar)
+                                # Pero si ya hay fecha y dice "FALTAN GIROS", Giros=False.
                                 st.session_state.chk_giros = False if "GIROS FALTAN" in nota else True
                                 st.session_state.chk_aisl = False if "AISLADORES FALTAN" in nota else True
                                 
+                                # Caso especial: Nuevo (Sin fecha, sin nota) -> Todo desmarcado limpio?
+                                # O mejor: Todo marcado listo para OK?
+                                # Tu lógica: "Si no lo marco, va al mensaje". Entonces mejor todo marcado por defecto.
                                 if not fp and not nota:
-                                    st.session_state.chk_giros = False
-                                    st.session_state.chk_aisl = False
+                                    st.session_state.chk_giros = True
+                                    st.session_state.chk_aisl = True
 
                         info = datos_completos[it]
                         fr = info['fila_excel']
@@ -581,29 +512,28 @@ with t2:
                         st.divider()
                         st.markdown(f"### 📍 {it}")
                         
+                        # CIMENTACIÓN
                         c1, c2 = st.columns([1, 2])
                         ec, fc = safe_val(d, 3), safe_val(d, 5)
                         c1.info(f"Cim: {ec}")
                         if fc: c2.success(f"Hecho: {fc}")
                         elif c2.button("Grabar CIM"):
                             guardar_prod_con_nota_compleja(nom, hj, fr, 5, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, bk)
-                            if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
-                            st.session_state.prod_dia[it].append("CIM"); st.rerun()
+                            st.session_state.prod_dia[it] = st.session_state.prod_dia.get(it, []) + ["CIM"]
+                            st.rerun()
                         
                         st.divider()
                         
-                        # --- SECCIÓN POSTE MEJORADA ---
+                        # --- POSTE INTELIGENTE ---
                         c1, c2 = st.columns([1, 2])
                         ep, fp = safe_val(d, 6), safe_val(d, 8)
                         c1.info(f"Poste: {ep}")
                         
-                        # VERIFICACIÓN DE BLOQUEO
-                        # Si está completo y tiene fecha, se bloquea (verde)
+                        # Si el estado interno dice COMPLETO y hay FECHA -> BLOQUEADO
                         if st.session_state.chk_comp and fp:
                             c2.success(f"✅ TERMINADO: {fp}")
-                            c2.caption("Para modificar, edita el Excel.")
                         else:
-                            # Si no está completo, mostramos controles
+                            # MODO EDICIÓN
                             with c2:
                                 st.write("**Montaje:**")
                                 cc1, cc2, cc3 = st.columns(3)
@@ -612,16 +542,16 @@ with t2:
                                 st.session_state.chk_comp = cc3.checkbox("Completo", value=st.session_state.chk_comp, on_change=on_completo_change)
                                 
                                 if st.button("💾 Grabar POSTE"):
-                                    txt = ""
-                                    if not st.session_state.chk_giros: txt += "GIROS FALTAN. "
-                                    if not st.session_state.chk_aisl: txt += "AISLADORES FALTAN. "
+                                    txt_pend = ""
+                                    if not st.session_state.chk_giros: txt_pend += "GIROS FALTAN. "
+                                    if not st.session_state.chk_aisl: txt_pend += "AISLADORES FALTAN. "
                                     
-                                    guardar_prod_con_nota_compleja(nom, hj, fr, 8, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, bk, txt)
-                                    if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
-                                    st.session_state.prod_dia[it].append("POSTE"); st.rerun()
+                                    guardar_prod_con_nota_compleja(nom, hj, fr, 8, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, bk, txt_pend)
+                                    st.session_state.prod_dia[it] = st.session_state.prod_dia.get(it, []) + ["POSTE"]
+                                    st.rerun()
 
                         st.divider()
-                        
+                        # MENSULA
                         c1, c2 = st.columns([1, 2])
                         m_desc = f"{safe_val(d,32) or ''} {safe_val(d,33) or ''}".strip()
                         fm = safe_val(d, 38)
@@ -629,16 +559,17 @@ with t2:
                         if fm: c2.success(f"Hecho: {fm}")
                         elif c2.button("Grabar MENSULA"):
                             guardar_prod_con_nota_compleja(nom, hj, fr, 38, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, bk)
-                            if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
-                            st.session_state.prod_dia[it].append("MEN"); st.rerun()
+                            st.session_state.prod_dia[it] = st.session_state.prod_dia.get(it, []) + ["MEN"]
+                            st.rerun()
                         
                         st.divider()
+                        # ANCLAJES
                         cols_t, cols_f = [18, 21, 24, 27], [20, 23, 26, 29]
-                        typs, cols_escritura, done = [], [], False
+                        typs, cols_wr, done = [], [], False
                         for i in range(4):
                             v = safe_val(d, cols_t[i])
                             if v:
-                                typs.append(str(v)); cols_escritura.append(cols_f[i])
+                                typs.append(str(v)); cols_wr.append(cols_f[i])
                                 if safe_val(d, cols_f[i]): done = True
                         c1, c2 = st.columns([1, 2])
                         c1.info(f"Tipos: {', '.join(typs) if typs else 'Ninguno'}")
@@ -646,7 +577,6 @@ with t2:
                         elif done: c2.success("✅ Ya registrados")
                         elif c2.button("Grabar ANCLAJES"):
                             hoy = datetime.now().strftime("%d/%m/%Y")
-                            for c_idx in cols_escritura:
-                                guardar_prod_con_nota_compleja(nom, hj, fr, c_idx, hoy, st.session_state.veh_glob, bk)
-                            if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
-                            st.session_state.prod_dia[it].append("ANC"); st.rerun()
+                            for c in cols_wr: guardar_prod_con_nota_compleja(nom, hj, fr, c, hoy, st.session_state.veh_glob, bk)
+                            st.session_state.prod_dia[it] = st.session_state.prod_dia.get(it, []) + ["ANC"]
+                            st.rerun()
