@@ -526,10 +526,9 @@ with t2:
                     todos_los_items = datos_completos.values()
                     
                     # 1. LISTA DE PERFILES (Columna A) - RESPETANDO ORDEN DEL EXCEL
-                    # Usamos las llaves del diccionario porque se cargaron secuencialmente
                     list_perfiles_ordenada = list(datos_completos.keys())
 
-                    # 2. Listas para filtros (Sets para quitar duplicados)
+                    # 2. Listas para filtros
                     list_cim = sorted(list(set(d['datos'][2] for d in todos_los_items if len(d['datos'])>2 and d['datos'][2])))
                     list_post = sorted(list(set(d['datos'][5] for d in todos_los_items if len(d['datos'])>5 and d['datos'][5])))
                     
@@ -562,7 +561,7 @@ with t2:
                             if fil_anc not in vals_a: continue
                         keys_filtradas.append(k)
 
-                    # Selector Principal (Ahora muestra Perfiles porque keys_filtradas son Perfiles)
+                    # Selector Principal
                     it = st.selectbox("Perfil a Trabajar", keys_filtradas)
                     
                     if it:
@@ -607,9 +606,7 @@ with t2:
                         info = datos_completos[it]
                         fr = info['fila_excel']
                         d = info['datos']
-                        
-                        # Datos visuales del perfil actual
-                        nombre_poste = safe_val(d, 6) # Columna F para mostrar info
+                        nombre_poste = safe_val(d, 6) 
 
                         # ===========================================================
                         #       ORGANIZACIÓN DE PESTAÑAS
@@ -624,7 +621,7 @@ with t2:
                             f_cim_res = safe_val(d, 5)
                             f_pos_res = safe_val(d, 8)
                             f_men_res = safe_val(d, 38)
-                            f_ten_res = safe_val(d, 39) # Columna AM (LA-280)
+                            f_ten_res = safe_val(d, 39) 
                             
                             cols_t_res, cols_f_res = [18, 21, 24, 27], [20, 23, 26, 29]
                             tiene_anclajes = False; anclajes_completos = True
@@ -642,154 +639,4 @@ with t2:
                                     if not st.session_state.chk_giros or not st.session_state.chk_aisl:
                                         st.warning(f"🗼 **Poste:** ⚠️ {f_pos_res} (Pendientes)")
                                     else: st.success(f"🗼 **Poste:** ✅ {f_pos_res}")
-                                else: st.error("🗼 **Poste:** ❌")
-
-                            with cr2:
-                                if not tiene_anclajes: st.info("⚓ **Anc:** ➖")
-                                elif anclajes_completos: st.success("⚓ **Anc:** ✅")
-                                else: st.error("⚓ **Anc:** ❌")
-                                    
-                                if f_men_res: st.success(f"🔧 **Mén:** ✅ {f_men_res}")
-                                else: st.error("🔧 **Mén:** ❌")
-
-                            st.markdown("---")
-                            if f_ten_res: st.success(f"⚡ **Cable LA-280:** ✅ {f_ten_res}")
-                            else: st.warning("⚡ **Cable LA-280:** ❌ Pendiente")
-
-                        # --- PESTAÑA 1: CIMENTACIÓN ---
-                        with tab_cim:
-                            st.subheader("Fase de Obra Civil")
-                            c1, c2 = st.columns([1, 2])
-                            ec, fc = safe_val(d, 3), safe_val(d, 5)
-                            c1.info(f"Tipo: {ec}")
-                            if fc: c2.success(f"✅ Ejecutado el: {fc}")
-                            elif c2.button("Grabar CIMENTACIÓN", use_container_width=True):
-                                guardar_prod_con_nota_compleja(nom, hj, fr, 5, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, bk)
-                                if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
-                                st.session_state.prod_dia[it].append("CIM"); st.rerun()
-
-                        # --- PESTAÑA 2: POSTES Y ANCLAJES ---
-                        with tab_pos_anc:
-                            st.subheader("1. Estructura (Poste)")
-                            c1, c2 = st.columns([1, 2])
-                            ep, fp = safe_val(d, 6), safe_val(d, 8)
-                            c1.info(f"Tipo: {ep}")
-                            if st.session_state.chk_comp and fp:
-                                c2.success(f"✅ TERMINADO: {fp}")
-                            else:
-                                with c2:
-                                    cc1, cc2, cc3 = st.columns(3)
-                                    st.session_state.chk_giros = cc1.checkbox("Giros", value=st.session_state.chk_giros)
-                                    st.session_state.chk_aisl = cc2.checkbox("Aisladores", value=st.session_state.chk_aisl)
-                                    st.session_state.chk_comp = cc3.checkbox("Completo", value=st.session_state.chk_comp, on_change=on_completo_change)
-                                    if st.button("💾 Grabar POSTE", use_container_width=True):
-                                        txt = ""; estilo = "NORMAL"
-                                        if not st.session_state.chk_giros: txt += "GIROS FALTAN. "; estilo = "GIROS"
-                                        if not st.session_state.chk_aisl: txt += "AISLADORES FALTAN. "; estilo = "AISLADORES"
-                                        if st.session_state.chk_comp: estilo = "NORMAL"
-                                        guardar_prod_con_nota_compleja(nom, hj, fr, 8, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, bk, txt, estilo_letra=estilo)
-                                        if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
-                                        st.session_state.prod_dia[it].append("POSTE"); st.rerun()
-                            
-                            st.divider(); st.subheader("2. Anclajes")
-                            cols_t, cols_f = [18, 21, 24, 27], [20, 23, 26, 29]
-                            typs, cols_escritura, done = [], [], False
-                            for i in range(4):
-                                v = safe_val(d, cols_t[i])
-                                if v:
-                                    typs.append(str(v)); cols_escritura.append(cols_f[i])
-                                    if safe_val(d, cols_f[i]): done = True
-                            c1, c2 = st.columns([1, 2])
-                            c1.info(f"Tipos: {', '.join(typs) if typs else 'Ninguno'}")
-                            if not typs: c2.write("-")
-                            elif done: c2.success("✅ Completos")
-                            elif c2.button("Grabar ANCLAJES", use_container_width=True):
-                                hoy = datetime.now().strftime("%d/%m/%Y")
-                                for c_idx in cols_escritura:
-                                    guardar_prod_con_nota_compleja(nom, hj, fr, c_idx, hoy, st.session_state.veh_glob, bk)
-                                if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
-                                st.session_state.prod_dia[it].append("ANC"); st.rerun()
-
-                        # --- PESTAÑA 3: MÉNSULAS ---
-                        with tab_men:
-                            st.subheader("Equipamiento: Ménsulas")
-                            c1, c2 = st.columns([1, 2])
-                            m_desc = f"{safe_val(d,32) or ''} {safe_val(d,33) or ''}".strip()
-                            fm = safe_val(d, 38)
-                            c1.info(f"Tipo: {m_desc or '-'}")
-                            if fm: c2.success(f"Hecho: {fm}")
-                            elif c2.button("Grabar MÉNSULA", use_container_width=True):
-                                guardar_prod_con_nota_compleja(nom, hj, fr, 38, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, bk)
-                                if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
-                                st.session_state.prod_dia[it].append("MEN"); st.rerun()
-
-                        # --- PESTAÑA 4: TENDIDOS (LA-280) ---
-                        with tab_ten:
-                            st.subheader("⚡ Tendido Cable LA-280")
-                            st.caption("Actualización por Tramos (Rango de Perfiles)")
-                            
-                            f_la280 = safe_val(d, 39) # Columna AM (39)
-                            
-                            c1, c2 = st.columns([1,2])
-                            if f_la280:
-                                c1.success(f"Estado en {it}:")
-                                c2.success(f"✅ {f_la280}")
-                            else:
-                                c1.warning(f"Estado en {it}:")
-                                c2.error("❌ PENDIENTE")
-                            
-                            st.divider()
-                            st.write("### 🛤️ Registrar Tramo")
-                            
-                            # 1. Selectores usando la LISTA REAL ORDENADA (Columna A)
-                            # Intentamos encontrar el índice del perfil actual para ponerlo por defecto
-                            idx_def = 0
-                            if it in list_perfiles_ordenada:
-                                idx_def = list_perfiles_ordenada.index(it)
-                            
-                            col_sel1, col_sel2 = st.columns(2)
-                            p_ini = col_sel1.selectbox("Desde Perfil:", list_perfiles_ordenada, index=idx_def)
-                            p_fin = col_sel2.selectbox("Hasta Perfil:", list_perfiles_ordenada, index=idx_def)
-                            
-                            fecha_tendido = datetime.now().strftime("%d/%m/%Y")
-                            
-                            if st.button("🚀 GRABAR TRAMO LA-280", type="primary", use_container_width=True):
-                                try:
-                                    # 2. Calcular los índices en la lista ordenada
-                                    idx_a = list_perfiles_ordenada.index(p_ini)
-                                    idx_b = list_perfiles_ordenada.index(p_fin)
-                                    
-                                    # Corregimos si el usuario puso el final antes del principio
-                                    if idx_a > idx_b: idx_a, idx_b = idx_b, idx_a
-                                    
-                                    # 3. Extraemos el SUB-GRUPO de perfiles a actualizar
-                                    perfiles_a_actualizar = list_perfiles_ordenada[idx_a : idx_b + 1]
-                                    
-                                    st.write(f"⏳ Grabando en {len(perfiles_a_actualizar)} perfiles (Columna AM)...")
-                                    barra = st.progress(0)
-                                    
-                                    contador = 0
-                                    # 4. Iteramos sobre esa sub-lista y buscamos su fila en el diccionario
-                                    for perfil_id in perfiles_a_actualizar:
-                                        if perfil_id in datos_completos:
-                                            fila_real = datos_completos[perfil_id]['fila_excel']
-                                            
-                                            guardar_prod_con_nota_compleja(
-                                                nom, hj, fila_real, 39, 
-                                                fecha_tendido, st.session_state.veh_glob, bk, 
-                                                texto_extra=f"Tendido LA-280 [{p_ini} -> {p_fin}]"
-                                            )
-                                            contador += 1
-                                            barra.progress(int((contador / len(perfiles_a_actualizar)) * 100))
-                                    
-                                    st.success(f"✅ ¡Hecho! {contador} perfiles actualizados.")
-                                    time.sleep(2)
-                                    
-                                    # Log para el reporte diario
-                                    if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
-                                    st.session_state.prod_dia[it].append(f"Tendido LA-280 ({p_ini}-{p_fin})")
-                                    
-                                    st.rerun()
-                                    
-                                except Exception as e:
-                                    st.error(f"Error en el proceso: {e}")
+                                else: st.error("🗼 **Poste:**
