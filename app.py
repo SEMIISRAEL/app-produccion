@@ -18,20 +18,24 @@ from email.mime.text import MIMEText
 from email import encoders
 from gspread.utils import rowcol_to_a1
 
-# --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Gestor SEMI - Tablet", layout="wide", page_icon="🏗️")
-
-# --- IDs FIJOS ---
+# ==========================================
+# --- 🛑 ZONA DE CONFIGURACIÓN GLOBAL (FIX V19) 🛑 ---
+# ==========================================
+# 1. IDs FIJOS (CONSTANTES)
+ID_ROSTER = "1ezFvpyTzkL98DJjpXeeGuqbMy_kTZItUC9FDkxFlD08"
 ID_VEHICULOS = "19PWpeCz8pl5NEDpK-omX5AdrLuJgOPrn6uSjtUGomY8"
 ID_CONFIG_PROD = "1uCu5pq6l1CjqXKPEkGkN-G5Z5K00qiV9kR_bGOii6FU"
 
-# === INICIALIZACIÓN GLOBAL DE VARIABLES ===
+# 2. VARIABLES GLOBALES DE SESIÓN (INIT)
 ID_ROSTER_ACTIVO = None
 TRAMO_ACTIVO = None
 ARCHIVO_PROD_ACTIVO = None
 ARCHIVO_PROD_BACKUP_ACTIVO = None
 nombre_roster_sel = "N/A"
 nombre_tramo_sel = "N/A"
+
+# 3. CONFIG DE PÁGINA
+st.set_page_config(page_title="Gestor SEMI - Tablet", layout="wide", page_icon="🏗️")
 
 # ==========================================
 #           LOGIN
@@ -86,11 +90,13 @@ def cargar_config_prod():
         datos = sh.sheet1.get_all_values()
         config = {}
         for row in datos:
+            # Ahora leemos TRES columnas (Tramo, Principal, Backup)
             if len(row) >= 3 and row[0] and row[1]: 
                 tramo = row[0].strip()
                 archivo_principal = row[1].strip()
                 archivo_backup = row[2].strip() if len(row) > 2 else "" 
                 if tramo and archivo_principal:
+                    # Devolvemos una tupla (Nombre Principal, Nombre Backup)
                     config[tramo] = (archivo_principal, archivo_backup)
             elif row and row[0].lower() in ["tramo", "seccion"]: continue 
         return config
@@ -103,8 +109,6 @@ with st.sidebar:
         st.rerun()
     st.markdown("---")
     
-    # 1. ROSTER
-    st.caption("📅 ROSTER ACTIVO")
     archivos_roster = buscar_archivos_roster()
     
     if archivos_roster:
@@ -120,14 +124,13 @@ with st.sidebar:
     
     st.markdown("---")
 
-    # 2. TRAMO
     st.caption("🏗️ PROYECTO / TRAMO")
     conf_prod = cargar_config_prod()
     
     if conf_prod:
         tramo_sel = st.selectbox("Seleccionar Tramo:", list(conf_prod.keys()), index=None, placeholder="Elige...")
         if tramo_sel:
-            global TRAMO_ACTIVO, ARCHIVO_PROD_ACTIVO, ARCHIVO_PROD_BACKUP_ACTIVO
+            # ASIGNACIÓN DE VARIABLES GLOBALES
             TRAMO_ACTIVO = tramo_sel
             ARCHIVO_PROD_ACTIVO, ARCHIVO_PROD_BACKUP_ACTIVO = conf_prod.get(tramo_sel)
             st.info(f"📁 {ARCHIVO_PROD_ACTIVO}")
@@ -153,9 +156,7 @@ def conectar_flexible(referencia):
             try: return client.open(referencia.replace(".xlsx", "").strip())
             except: return None
 
-# ==========================================
-#      CARGA MASIVA (CACHÉ)
-# ==========================================
+# ... (El resto de funciones auxiliares) ...
 @st.cache_data(ttl=300) 
 def cargar_datos_completos_hoja(nombre_archivo, nombre_hoja):
     sh = conectar_flexible(nombre_archivo)
@@ -177,9 +178,6 @@ def safe_val(lista, indice):
     if idx_py < len(lista): return lista[idx_py]
     return None
 
-# ==========================================
-#      CARGAS DATOS AUXILIARES
-# ==========================================
 @st.cache_data(ttl=600)
 def cargar_vehiculos_dict():
     sh = conectar_flexible(ID_VEHICULOS)
@@ -225,16 +223,6 @@ def buscar_columna_dia(ws, dia_num):
     if dias_dif < 0: dias_dif += 30
     return 14 + (dias_dif * 2)
 
-@st.cache_data(ttl=600)
-def obtener_hojas_track_cached(nombre_archivo):
-    sh = conectar_flexible(nombre_archivo)
-    if not sh: return None
-    try: return [ws.title for ws in sh.worksheets() if "HR TRACK" in ws.title.upper()]
-    except: return []
-
-# ==========================================
-#          GUARDADO Y ACTUALIZACIONES
-# ==========================================
 def guardar_parte(fecha, lista, vehiculo, para, id_roster):
     sh = conectar_flexible(id_roster)
     if not sh: return False
@@ -292,18 +280,6 @@ def guardar_prod_con_nota(archivo_principal, hoja, fila, col, valor, vehiculo, a
     cargar_datos_completos_hoja.clear() 
     return exito_principal
 
-def guardar_produccion(archivo_prod, hoja_prod, fila, col, valor):
-    sh = conectar_flexible(archivo_prod)
-    if not sh: return False
-    try:
-        ws = sh.worksheet(hoja_prod)
-        ws.update_cell(fila, col, valor)
-        return True
-    except: return False
-
-# ==========================================
-#          PDF GENERATOR
-# ==========================================
 def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
     buffer = BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
@@ -339,7 +315,7 @@ def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
         c.drawString(x_coords[col_base]+10, y_cursor+6, f"{h_base:g}")
         if h_extra > 0: c.drawString(x_coords[5]+10, y_cursor+6, f"{h_extra:g}")
         c.setLineWidth(0.5); c.line(40, y_cursor, 555, y_cursor); y_cursor -= 20
-        if y_cursor < 200: c.showPage(); y_cursor = h - 50
+        if y_cursor < 200: c.showPage(); y_cursor = height - 50
     
     y_min = height - 400
     while y_cursor > y_min: c.setLineWidth(0.5); c.line(40, y_cursor, 555, y_cursor); y_cursor -= 20
@@ -354,7 +330,7 @@ def generar_pdf_bytes(fecha_str, jefe, trabajadores, datos_para, prod_dia):
         c.setFillColor(colors.black); c.setFont("Helvetica", 10); c.drawString(50, y_bloque - 35, f"{datos_para['inicio']}-{datos_para['fin']} | {datos_para['motivo']}")
         c.setStrokeColor(colors.black); c.setLineWidth(1); y_bloque -= 70
 
-    y_act_top = y_bloque; alt_act = y_act_top - 130
+    y_act = y_bloque; alt_act = y_act - 130
     if alt_act > 20:
         c.rect(40, 130, 515, alt_act); c.setFont("Helvetica-Bold", 10); c.drawString(50, y_act_top - 15, "Work Description / Location:")
         y_line = y_act_top - 35
@@ -429,7 +405,7 @@ with t1:
                 en, tl = False, "D"
                 if turno=="N" or (turno=="AUT" and (h_ini.hour>=21 or h_ini.hour<=4)): en, tl = True, "N"
                 if comida: ht = max(0, ht-1)
-                pid = sel_t.split(" - ")[0]; pnom = sel_t.split(" - ")[1]
+                pid = trab_sel.split(" - ")[0]; pnom = trab_sel.split(" - ")[1]
                 st.session_state.lista_sel.append({"ID":pid, "Nombre":pnom, "Total_Horas":round(ht,2), "Turno_Letra":tl, "H_Inicio":h_ini.strftime("%H:%M"), "H_Fin":h_fin.strftime("%H:%M"), "Es_Noche":en})
         
         if st.session_state.lista_sel:
@@ -474,4 +450,76 @@ with t2:
         conf = cargar_config_prod()
         nom = conf.get(TRAMO_ACTIVO)
         
-        if isinstance(nom,
+        if isinstance(nom, tuple):
+            nom_arch_principal, nom_arch_backup = nom
+        else:
+            nom_arch_principal, nom_arch_backup = nom, None
+        
+        hjs = obtener_hojas_track_cached(nom_arch_principal)
+        
+        if hjs:
+            hj = st.selectbox("Hoja", hjs, index=None)
+            if hj:
+                with st.spinner("Cargando..."):
+                    datos_completos = cargar_datos_completos_hoja(nom_arch_principal, hj)
+                
+                if datos_completos:
+                    fil = st.text_input("Filtro Km")
+                    keys = list(datos_completos.keys())
+                    if fil: keys = [k for k in keys if fil in str(k)]
+                    it = st.selectbox("Elemento", keys)
+                    
+                    if it:
+                        info = datos_completos[it]
+                        fr = info['fila_excel']
+                        d = info['datos']
+                        
+                        st.divider()
+                        st.markdown(f"### 📍 {it}")
+                        
+                        c1, c2 = st.columns([1, 2])
+                        ec, fc = safe_val(d, 3), safe_val(d, 5)
+                        c1.info(f"Cim: {ec or '-'}")
+                        if fc: c2.success(f"Hecho: {fc}")
+                        elif c2.button("Grabar CIM", key="b_cim"):
+                            guardar_prod_con_nota(nom_arch_principal, hj, fr, 5, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, ARCHIVO_PROD_BACKUP_ACTIVO)
+                            if it not in st.session_state.prod: st.session_state.prod[it]=[]
+                            st.session_state.prod[it].append("CIM"); st.rerun()
+                        st.divider()
+                        c1, c2 = st.columns([1, 2])
+                        ep, fp = safe_val(d, 6), safe_val(d, 8)
+                        c1.info(f"Poste: {ep or '-'}")
+                        if fp: c2.success(f"Hecho: {fp}")
+                        elif c2.button("Grabar POSTE", key="b_pos"):
+                            guardar_prod_con_nota(nom_arch_principal, hj, fr, 8, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, ARCHIVO_PROD_BACKUP_ACTIVO)
+                            if it not in st.session_state.prod: st.session_state.prod[it]=[]
+                            st.session_state.prod[it].append("POSTE"); st.rerun()
+                        st.divider()
+                        c1, c2 = st.columns([1, 2])
+                        m_desc = f"{safe_val(d,32) or ''} {safe_val(d,33) or ''}".strip()
+                        fm = safe_val(d, 38)
+                        c1.info(f"Ménsula: {m_desc or '-'}")
+                        if fm: c2.success(f"Hecho: {fm}")
+                        elif c2.button("Grabar MENSULA", key="b_men"):
+                            guardar_prod_con_nota(nom_arch_principal, hj, fr, 38, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, ARCHIVO_PROD_BACKUP_ACTIVO)
+                            if it not in st.session_state.prod: st.session_state.prod[it]=[]
+                            st.session_state.prod[it].append("MEN"); st.rerun()
+                        st.divider()
+                        st.write("**Anclajes:**")
+                        cols_t, cols_f = [18, 21, 24, 27], [20, 23, 26, 29]
+                        typs, cols_escritura, done = [], [], False
+                        for i in range(4):
+                            v = safe_val(d, cols_t[i])
+                            if v:
+                                typs.append(str(v)); cols_escritura.append(cols_f[i])
+                                if safe_val(d, cols_f[i]): done = True
+                        c1, c2 = st.columns([1, 2])
+                        c1.info(f"Tipos: {', '.join(typs) if typs else 'Ninguno'}")
+                        if not typs: c2.write("-")
+                        elif done: c2.success("✅ Ya registrados")
+                        elif c2.button("Grabar ANCLAJES", key="b_anc"):
+                            hoy = datetime.now().strftime("%d/%m/%Y")
+                            for c_idx in cols_escritura:
+                                guardar_prod_con_nota(nom_arch_principal, hj, fr, c_idx, hoy, st.session_state.veh_glob, ARCHIVO_PROD_BACKUP_ACTIVO)
+                            if it not in st.session_state.prod: st.session_state.prod[it]=[]
+                            st.session_state.prod[it].append("ANC"); st.rerun()
