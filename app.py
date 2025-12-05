@@ -3,7 +3,6 @@ import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
 from google.oauth2 import service_account
 from datetime import datetime, timedelta
 import time
@@ -14,7 +13,6 @@ from reportlab.lib import colors
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
-from email.mime.text import MIMEText
 from email import encoders
 from gspread.utils import rowcol_to_a1
 
@@ -42,7 +40,7 @@ if 'veh_glob' not in st.session_state: st.session_state.veh_glob = None
 if 'lista_sel' not in st.session_state: st.session_state.lista_sel = []
 if 'prod_dia' not in st.session_state: st.session_state.prod_dia = {}
 
-# VARIABLES CHECKBOXES
+# VARIABLES CHECKBOXES (ESTADO DE LA GUI)
 if 'chk_giros' not in st.session_state: st.session_state.chk_giros = False
 if 'chk_aisl' not in st.session_state: st.session_state.chk_aisl = False
 if 'chk_comp' not in st.session_state: st.session_state.chk_comp = False
@@ -54,7 +52,7 @@ def on_completo_change():
         st.session_state.chk_aisl = True
 
 # ==========================================
-#            CONEXIÓN
+#            CONEXIÓN Y HERRAMIENTAS
 # ==========================================
 @st.cache_resource
 def get_gspread_client():
@@ -72,114 +70,77 @@ def conectar_flexible(referencia):
             try: return client.open(referencia.replace(".xlsx", ""))
             except: return None
 
-# ==========================================
-#       FUNCIONES AUXILIARES (MODIFICADAS)
-# ==========================================
-
 def safe_val(lista, indice):
     idx_py = indice - 1
     if idx_py < len(lista): return lista[idx_py]
     return None
 
 def leer_nota_directa(nombre_archivo, nombre_hoja, fila, col):
-    """Lee la nota de una celda específica para ver pendientes"""
+    """Lee la nota de una celda para ver pendientes antiguos (legacy)."""
     try:
         sh = conectar_flexible(nombre_archivo)
         ws = sh.worksheet(nombre_hoja)
         return ws.cell(fila, col).note or ""
     except: return ""
 
-# --- NUEVA FUNCIÓN: CAMBIAR FORMATO GOOGLE (INTELIGENCIA DEL ROBOT) ---
+# ------------------------------------------------------------------
+#  FUNCIONES DE INTELIGENCIA VISUAL (EL ROBOT)
+# ------------------------------------------------------------------
+
 def cambiar_formato_google(ws, fila, col, tipo_estilo):
     """
-    Aplica el 'Código Secreto' de fuentes en Google Sheets.
-    tipo_estilo: "GIROS", "AISLADORES", "NORMAL"
+    LA MANO DEL ROBOT: Escribe usando 'tinta invisible' (formato).
     """
     try:
-        # Definimos los colores y fuentes según tu lógica
         if tipo_estilo == "GIROS":
-            # Courier New, Rojo, Negrita
-            user_format = {
-                "textFormat": {
-                    "fontFamily": "Courier New",
-                    "foregroundColor": {"red": 1.0, "green": 0.0, "blue": 0.0},
-                    "bold": True
-                }
-            }
+            # Courier New + Rojo + Negrita = FALTA GIROS
+            user_format = {"textFormat": {"fontFamily": "Courier New", "foregroundColor": {"red": 1.0, "green": 0.0, "blue": 0.0}, "bold": True}}
         elif tipo_estilo == "AISLADORES":
-            # Times New Roman, Azul, Negrita
-            user_format = {
-                "textFormat": {
-                    "fontFamily": "Times New Roman",
-                    "foregroundColor": {"red": 0.0, "green": 0.0, "blue": 1.0},
-                    "bold": True
-                }
-            }
+            # Times New Roman + Azul + Negrita = FALTA AISLADORES
+            user_format = {"textFormat": {"fontFamily": "Times New Roman", "foregroundColor": {"red": 0.0, "green": 0.0, "blue": 1.0}, "bold": True}}
         else:
-            # NORMAL: Arial, Negro, Normal
-            user_format = {
-                "textFormat": {
-                    "fontFamily": "Arial",
-                    "foregroundColor": {"red": 0.0, "green": 0.0, "blue": 0.0},
-                    "bold": False
-                }
-            }
+            # Arial + Negro = NORMAL (COMPLETO)
+            user_format = {"textFormat": {"fontFamily": "Arial", "foregroundColor": {"red": 0.0, "green": 0.0, "blue": 0.0}, "bold": False}}
 
-        # Construimos la petición JSON para la API de Google
         body = {
-            "requests": [
-                {
-                    "repeatCell": {
-                        "range": {
-                            "sheetId": ws.id,
-                            "startRowIndex": fila - 1,
-                            "endRowIndex": fila,
-                            "startColumnIndex": col - 1,
-                            "endColumnIndex": col
-                        },
-                        "cell": {
-                            "userEnteredFormat": user_format
-                        },
-                        "fields": "userEnteredFormat(textFormat)"
-                    }
+            "requests": [{
+                "repeatCell": {
+                    "range": {"sheetId": ws.id, "startRowIndex": fila - 1, "endRowIndex": fila, "startColumnIndex": col - 1, "endColumnIndex": col},
+                    "cell": {"userEnteredFormat": user_format},
+                    "fields": "userEnteredFormat(textFormat)"
                 }
-            ]
+            }]
         }
-        # Enviamos la actualización de formato
-        ws.spreadsheet.batch_update(body)
-        return True
-    except Exception as e:
-        print(f"Error formato: {e}")
-        return False
-# ... código anterior ...
         ws.spreadsheet.batch_update(body)
         return True
     except Exception as e:
         print(f"Error formato: {e}")
         return False
 
-# --- PEGA AQUÍ LA NUEVA FUNCIÓN ---
 def detectar_estilo_celda(ws, fila, col):
     """
-    Lee el formato de la celda para descifrar el código secreto.
-    Retorna: "GIROS", "AISLADORES", "NORMAL" o None
+    EL OJO DEL ROBOT: Lee el formato para saber qué falta, aunque haya fecha.
     """
     try:
         nombre_hoja = ws.title
         rango = f"{nombre_hoja}!{rowcol_to_a1(fila, col)}"
-        # ... (resto del código de la función que te pasé) ...
-        return "NORMAL"
+        
+        # Petición especial a la API para traer metadatos
+        res = ws.spreadsheet.fetch_sheet_metadata(params={'includeGridData': True, 'ranges': [rango]})
+        
+        try:
+            celda_data = res['sheets'][0]['data'][0]['rowData'][0]['values'][0]
+            formato = celda_data.get('userEnteredFormat', {}).get('textFormat', {})
+            font_family = formato.get('fontFamily', 'Arial')
+            
+            if 'Courier' in font_family: return "GIROS"      # Detectamos código rojo
+            elif 'Times' in font_family: return "AISLADORES" # Detectamos código azul
+            else: return "NORMAL"
+        except (IndexError, KeyError): return "NORMAL"
+    except Exception as e: return "NORMAL"
 
 # ==========================================
-#       CARGA MASIVA (CACHÉ)
-# ==========================================
-@st.cache_data(ttl=300) 
-def cargar_datos_completos_hoja...
-
-
-
-# ==========================================
-#       CARGA MASIVA (CACHÉ)
+#       CARGA MASIVA Y CONFIG
 # ==========================================
 @st.cache_data(ttl=300) 
 def cargar_datos_completos_hoja(nombre_archivo, nombre_hoja):
@@ -197,9 +158,6 @@ def cargar_datos_completos_hoja(nombre_archivo, nombre_hoja):
         return datos_procesados
     except: return None
 
-# ==========================================
-#       SIDEBAR
-# ==========================================
 @st.cache_data(ttl=300)
 def buscar_archivos_roster():
     try:
@@ -228,6 +186,9 @@ def cargar_config_prod():
         return config
     except: return {}
 
+# ==========================================
+#       SIDEBAR
+# ==========================================
 with st.sidebar:
     st.write(f"👤 **{st.session_state.user_name.upper()}**")
     if st.button("Cerrar Sesión"):
@@ -235,7 +196,6 @@ with st.sidebar:
         st.rerun()
     st.markdown("---")
     
-    # 1. ROSTER
     st.caption("📅 ROSTER ACTIVO")
     archivos_roster = buscar_archivos_roster()
     if archivos_roster:
@@ -302,7 +262,7 @@ def obtener_hojas_track_cached(nombre_archivo):
     except: return []
 
 # ==========================================
-#       GUARDADO Y EMAIL (ACTUALIZADO CON ESTILOS)
+#       GUARDADO (CON FORMATO) Y PDF
 # ==========================================
 def guardar_parte(fecha, lista, vehiculo, para, id_roster):
     sh = conectar_flexible(id_roster)
@@ -329,10 +289,9 @@ def guardar_parte(fecha, lista, vehiculo, para, id_roster):
         return True
     except: return False
 
-# --- FUNCIÓN DE GUARDADO PRINCIPAL (MODIFICADA) ---
 def guardar_prod_con_nota_compleja(archivo_principal, hoja, fila, col, valor, vehiculo, archivo_backup, texto_extra="", estilo_letra=None):
     """
-    estilo_letra: Recibe "GIROS", "AISLADORES" o None (para normal)
+    Guarda datos y aplica estilo si se especifica (GIROS/AISLADORES/NORMAL).
     """
     exito_principal = False
     sh = conectar_flexible(archivo_principal)
@@ -343,15 +302,13 @@ def guardar_prod_con_nota_compleja(archivo_principal, hoja, fila, col, valor, ve
         celda_a1 = rowcol_to_a1(fila, col)
         hora_act = datetime.now().strftime("%H:%M")
         nota = f"📅 {valor} - {hora_act}\n🚛 {vehiculo}\n👷 {st.session_state.user_name}"
-        if texto_extra:
-            nota += f"\n⚠️ PENDIENTE: {texto_extra}"
+        if texto_extra: nota += f"\n⚠️ PENDIENTE: {texto_extra}"
         ws.insert_note(celda_a1, nota)
         
-        # --- APLICAMOS EL ESTILO SECRETO AQUÍ ---
+        # --- APLICAR ESTILO ---
         if estilo_letra:
             cambiar_formato_google(ws, fila, col, estilo_letra)
         else:
-            # Si no hay estilo específico, aseguramos que sea normal
             cambiar_formato_google(ws, fila, col, "NORMAL")
             
         exito_principal = True
@@ -366,16 +323,12 @@ def guardar_prod_con_nota_compleja(archivo_principal, hoja, fila, col, valor, ve
                 ws_bk = sh_bk.worksheet(hoja)
                 ws_bk.update_cell(fila, col, valor)
                 ws_bk.insert_note(rowcol_to_a1(fila, col), nota)
-                # Opcional: Aplicar formato al backup también
                 if estilo_letra: cambiar_formato_google(ws_bk, fila, col, estilo_letra)
         except: pass
 
     cargar_datos_completos_hoja.clear() 
     return exito_principal
 
-# ==========================================
-#       PDF GENERATOR (SIN CAMBIOS)
-# ==========================================
 def generar_pdf(fecha, jefe, lista, para, prod):
     b = BytesIO()
     c = canvas.Canvas(b, pagesize=A4); _, h = A4
@@ -415,8 +368,8 @@ def generar_pdf(fecha, jefe, lista, para, prod):
     y_min = h - 400
     while y_cursor > y_min: c.setLineWidth(0.5); c.line(40, y_cursor, 555, y_cursor); y_cursor -= 20
     c.setLineWidth(1)
-    y_final = y_cursor # Definimos y_final aquí
-    for x in x_coords: c.line(x, y_tabla_start + 20, x, y_final - 0) # Ajuste visual
+    y_final = y_cursor
+    for x in x_coords: c.line(x, y_tabla_start + 20, x, y_final - 0)
     c.line(555, y_tabla_start + 20, 555, y_final - 0) 
 
     y_bloque = y_final - 40
@@ -452,7 +405,7 @@ def enviar_email(pdf, nombre, fecha, jefe):
     except: return False
 
 # ==========================================
-#            UI
+#            UI PRINCIPAL
 # ==========================================
 if 'lista_sel' not in st.session_state: st.session_state.lista_sel = []
 if 'prod_dia' not in st.session_state: st.session_state.prod_dia = {}
@@ -552,7 +505,6 @@ with t2:
                     datos_completos = cargar_datos_completos_hoja(nom, hj)
                 
                 if datos_completos:
-                    # FILTROS
                     todos_los_items = datos_completos.values()
                     list_cim = sorted(list(set(d['datos'][2] for d in todos_los_items if len(d['datos'])>2 and d['datos'][2])))
                     list_post = sorted(list(set(d['datos'][5] for d in todos_los_items if len(d['datos'])>5 and d['datos'][5])))
@@ -587,49 +539,52 @@ with t2:
                     it = st.selectbox("Elemento", keys_filtradas)
                     
                     if it:
-                        # RECARGA DE ESTADO DEL POSTE
-                       st.session_state.last_item_loaded = it
-                        info = datos_completos[it]
-                        fr = info['fila_excel']
-                        d = info['datos']
-                        fp = safe_val(d, 8)
-                        
-                        # --- INICIO DEL NUEVO CEREBRO DEL ROBOT ---
-                        estilo_detectado = "NORMAL"
-                        
-                        # 1. Solo si hay fecha, intentamos leer el color/fuente
-                        if fp: 
-                            try:
-                                sh_temp = conectar_flexible(nom)
-                                ws_temp = sh_temp.worksheet(hj)
-                                # Usamos la función que pegaste en el Paso 1
-                                estilo_detectado = detectar_estilo_celda(ws_temp, fr, 8)
-                            except: pass
+                        # ------------------------------------------------------------------
+                        # CEREBRO DEL ROBOT: LECTURA DE ESTADO + COLOR
+                        # ------------------------------------------------------------------
+                        if st.session_state.last_item_loaded != it:
+                            st.session_state.last_item_loaded = it
+                            info = datos_completos[it]
+                            fr = info['fila_excel']
+                            d = info['datos']
+                            fp = safe_val(d, 8)
+                            
+                            estilo_detectado = "NORMAL"
+                            # Solo usamos el "Ojo" si hay fecha, para ahorrar tiempo
+                            if fp:
+                                try:
+                                    sh_temp = conectar_flexible(nom)
+                                    ws_temp = sh_temp.worksheet(hj)
+                                    estilo_detectado = detectar_estilo_celda(ws_temp, fr, 8)
+                                except: pass
 
-                        # 2. Tomamos decisiones basadas en el estilo detectado
-                        if not fp:
-                            # CASO 1: No hay fecha -> Todo pendiente
-                            st.session_state.chk_comp = False
-                            st.session_state.chk_giros = False
-                            st.session_state.chk_aisl = False
+                            # Decisión Lógica
+                            if not fp:
+                                # Sin fecha = Todo pendiente
+                                st.session_state.chk_comp = False
+                                st.session_state.chk_giros = False
+                                st.session_state.chk_aisl = False
+                            
+                            elif estilo_detectado == "NORMAL":
+                                # Fecha + Arial = TERMINADO
+                                st.session_state.chk_comp = True
+                                st.session_state.chk_giros = True
+                                st.session_state.chk_aisl = True
+                            
+                            elif estilo_detectado == "GIROS":
+                                # Fecha + Courier = Falta Giros
+                                st.session_state.chk_comp = False
+                                st.session_state.chk_giros = False
+                                st.session_state.chk_aisl = True
+                                
+                            elif estilo_detectado == "AISLADORES":
+                                # Fecha + Times = Falta Aisladores
+                                st.session_state.chk_comp = False
+                                st.session_state.chk_giros = True
+                                st.session_state.chk_aisl = False
+
+                        # ------------------------------------------------------------------
                         
-                        elif estilo_detectado == "NORMAL":
-                            # CASO 2: Fecha normal (Arial) -> TERMINADO BLOQUEADO
-                            st.session_state.chk_comp = True
-                            st.session_state.chk_giros = True
-                            st.session_state.chk_aisl = True
-                            
-                        elif estilo_detectado == "GIROS":
-                            # CASO 3: Courier (Rojo) -> FALTAN GIROS
-                            st.session_state.chk_comp = False
-                            st.session_state.chk_giros = False # Desmarcado para que lo veas
-                            st.session_state.chk_aisl = True
-                            
-                        elif estilo_detectado == "AISLADORES":
-                            # CASO 4: Times (Azul) -> FALTAN AISLADORES
-                            st.session_state.chk_comp = False
-                            st.session_state.chk_giros = True
-                            st.session_state.chk_aisl = False # Desmarcado para que lo veas
                         info = datos_completos[it]
                         fr = info['fila_excel']
                         d = info['datos']
@@ -647,17 +602,16 @@ with t2:
                         
                         st.divider()
                         
-                        # --- SECCIÓN POSTE INTELIGENTE (MODIFICADA) ---
+                        # --- POSTE (CON ROBOT) ---
                         c1, c2 = st.columns([1, 2])
                         ep, fp = safe_val(d, 6), safe_val(d, 8)
                         c1.info(f"Poste: {ep}")
                         
-                        # SI ESTÁ TERMINADO Y SIN PENDIENTES -> BLOQUEADO
+                        # Si está MARCADO como completo en nuestros checkbox -> Se ve verde
                         if st.session_state.chk_comp and fp:
                             c2.success(f"✅ TERMINADO: {fp}")
-                            st.info("Para editar, borra la fecha en el Excel.")
+                            st.info("Para editar, borra la fecha en el Excel o desbloquea aquí abajo si fue un error.")
                         else:
-                            # SI ESTÁ PENDIENTE -> EDITABLE
                             with c2:
                                 st.write("**Montaje:**")
                                 cc1, cc2, cc3 = st.columns(3)
@@ -667,18 +621,16 @@ with t2:
                                 
                                 if st.button("💾 Grabar POSTE"):
                                     txt = ""
-                                    # LÓGICA DE ESTILO PARA EL ROBOT
                                     estilo_a_aplicar = "NORMAL" # Por defecto
                                     
+                                    # Lógica de escritura (Mano del Robot)
                                     if not st.session_state.chk_giros:
                                         txt += "GIROS FALTAN. "
-                                        estilo_a_aplicar = "GIROS" # Código 'a' (Courier/Rojo)
-                                        
+                                        estilo_a_aplicar = "GIROS"
+                                    
                                     if not st.session_state.chk_aisl:
                                         txt += "AISLADORES FALTAN. "
-                                        # Si faltan AMBOS, priorizamos AISLADORES (o puedes cambiarlo)
-                                        # O si prefieres que Giros gane, cambia el orden
-                                        estilo_a_aplicar = "AISLADORES" # Código 'b' (Times/Azul)
+                                        estilo_a_aplicar = "AISLADORES"
                                     
                                     if st.session_state.chk_comp:
                                         estilo_a_aplicar = "NORMAL"
@@ -717,4 +669,3 @@ with t2:
                                 guardar_prod_con_nota_compleja(nom, hj, fr, c_idx, hoy, st.session_state.veh_glob, bk)
                             if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
                             st.session_state.prod_dia[it].append("ANC"); st.rerun()
-
