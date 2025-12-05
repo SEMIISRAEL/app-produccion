@@ -505,6 +505,7 @@ with t2:
                     datos_completos = cargar_datos_completos_hoja(nom, hj)
                 
                 if datos_completos:
+                    # --- FILTROS GLOBALES (Se mantienen arriba) ---
                     todos_los_items = datos_completos.values()
                     list_cim = sorted(list(set(d['datos'][2] for d in todos_los_items if len(d['datos'])>2 and d['datos'][2])))
                     list_post = sorted(list(set(d['datos'][5] for d in todos_los_items if len(d['datos'])>5 and d['datos'][5])))
@@ -536,12 +537,12 @@ with t2:
                             if fil_anc not in vals_a: continue
                         keys_filtradas.append(k)
 
-                    it = st.selectbox("Elemento", keys_filtradas)
+                    it = st.selectbox("Elemento a Trabajar", keys_filtradas)
                     
                     if it:
-                        # ------------------------------------------------------------------
-                        # CEREBRO DEL ROBOT: LECTURA DE ESTADO + COLOR
-                        # ------------------------------------------------------------------
+                        # -----------------------------------------------------------
+                        # CEREBRO DEL ROBOT (Lectura de Estado)
+                        # -----------------------------------------------------------
                         if st.session_state.last_item_loaded != it:
                             st.session_state.last_item_loaded = it
                             info = datos_completos[it]
@@ -550,7 +551,6 @@ with t2:
                             fp = safe_val(d, 8)
                             
                             estilo_detectado = "NORMAL"
-                            # Solo usamos el "Ojo" si hay fecha, para ahorrar tiempo
                             if fp:
                                 try:
                                     sh_temp = conectar_flexible(nom)
@@ -558,114 +558,136 @@ with t2:
                                     estilo_detectado = detectar_estilo_celda(ws_temp, fr, 8)
                                 except: pass
 
-                            # Decisión Lógica
                             if not fp:
-                                # Sin fecha = Todo pendiente
                                 st.session_state.chk_comp = False
                                 st.session_state.chk_giros = False
                                 st.session_state.chk_aisl = False
-                            
                             elif estilo_detectado == "NORMAL":
-                                # Fecha + Arial = TERMINADO
                                 st.session_state.chk_comp = True
                                 st.session_state.chk_giros = True
                                 st.session_state.chk_aisl = True
-                            
                             elif estilo_detectado == "GIROS":
-                                # Fecha + Courier = Falta Giros
                                 st.session_state.chk_comp = False
                                 st.session_state.chk_giros = False
                                 st.session_state.chk_aisl = True
-                                
                             elif estilo_detectado == "AISLADORES":
-                                # Fecha + Times = Falta Aisladores
                                 st.session_state.chk_comp = False
                                 st.session_state.chk_giros = True
                                 st.session_state.chk_aisl = False
 
-                        # ------------------------------------------------------------------
-                        
+                        # -----------------------------------------------------------
+                        # CARGA DE DATOS ACTUALES
+                        # -----------------------------------------------------------
                         info = datos_completos[it]
                         fr = info['fila_excel']
                         d = info['datos']
-                        st.divider()
-                        st.markdown(f"### 📍 {it}")
-                        
-                        c1, c2 = st.columns([1, 2])
-                        ec, fc = safe_val(d, 3), safe_val(d, 5)
-                        c1.info(f"Cim: {ec}")
-                        if fc: c2.success(f"Hecho: {fc}")
-                        elif c2.button("Grabar CIM"):
-                            guardar_prod_con_nota_compleja(nom, hj, fr, 5, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, bk)
-                            if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
-                            st.session_state.prod_dia[it].append("CIM"); st.rerun()
-                        
-                        st.divider()
-                        
-                        # --- POSTE (CON ROBOT) ---
-                        c1, c2 = st.columns([1, 2])
-                        ep, fp = safe_val(d, 6), safe_val(d, 8)
-                        c1.info(f"Poste: {ep}")
-                        
-                        # Si está MARCADO como completo en nuestros checkbox -> Se ve verde
-                        if st.session_state.chk_comp and fp:
-                            c2.success(f"✅ TERMINADO: {fp}")
-                            st.info("Para editar, borra la fecha en el Excel o desbloquea aquí abajo si fue un error.")
-                        else:
-                            with c2:
-                                st.write("**Montaje:**")
-                                cc1, cc2, cc3 = st.columns(3)
-                                st.session_state.chk_giros = cc1.checkbox("Giros", value=st.session_state.chk_giros)
-                                st.session_state.chk_aisl = cc2.checkbox("Aisladores", value=st.session_state.chk_aisl)
-                                st.session_state.chk_comp = cc3.checkbox("Completo", value=st.session_state.chk_comp, on_change=on_completo_change)
-                                
-                                if st.button("💾 Grabar POSTE"):
-                                    txt = ""
-                                    estilo_a_aplicar = "NORMAL" # Por defecto
-                                    
-                                    # Lógica de escritura (Mano del Robot)
-                                    if not st.session_state.chk_giros:
-                                        txt += "GIROS FALTAN. "
-                                        estilo_a_aplicar = "GIROS"
-                                    
-                                    if not st.session_state.chk_aisl:
-                                        txt += "AISLADORES FALTAN. "
-                                        estilo_a_aplicar = "AISLADORES"
-                                    
-                                    if st.session_state.chk_comp:
-                                        estilo_a_aplicar = "NORMAL"
 
-                                    guardar_prod_con_nota_compleja(nom, hj, fr, 8, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, bk, txt, estilo_letra=estilo_a_aplicar)
-                                    if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
-                                    st.session_state.prod_dia[it].append("POSTE"); st.rerun()
+                        st.markdown(f"### 📍 Trabajando en: {it}")
+                        st.markdown("---")
 
-                        st.divider()
+                        # ===========================================================
+                        #       AQUÍ ESTÁ LA NUEVA ORGANIZACIÓN POR PESTAÑAS
+                        # ===========================================================
                         
-                        c1, c2 = st.columns([1, 2])
-                        m_desc = f"{safe_val(d,32) or ''} {safe_val(d,33) or ''}".strip()
-                        fm = safe_val(d, 38)
-                        c1.info(f"Ménsula: {m_desc or '-'}")
-                        if fm: c2.success(f"Hecho: {fm}")
-                        elif c2.button("Grabar MENSULA"):
-                            guardar_prod_con_nota_compleja(nom, hj, fr, 38, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, bk)
-                            if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
-                            st.session_state.prod_dia[it].append("MEN"); st.rerun()
-                        
-                        st.divider()
-                        cols_t, cols_f = [18, 21, 24, 27], [20, 23, 26, 29]
-                        typs, cols_escritura, done = [], [], False
-                        for i in range(4):
-                            v = safe_val(d, cols_t[i])
-                            if v:
-                                typs.append(str(v)); cols_escritura.append(cols_f[i])
-                                if safe_val(d, cols_f[i]): done = True
-                        c1, c2 = st.columns([1, 2])
-                        c1.info(f"Tipos: {', '.join(typs) if typs else 'Ninguno'}")
-                        if not typs: c2.write("-")
-                        elif done: c2.success("✅ Ya registrados")
-                        elif c2.button("Grabar ANCLAJES"):
-                            hoy = datetime.now().strftime("%d/%m/%Y")
-                            for c_idx in cols_escritura:
-                                guardar_prod_con_nota_compleja(nom, hj, fr, c_idx, hoy, st.session_state.veh_glob, bk)
-                            if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
-                            st.session_state.prod_dia[it].append("ANC"); st.rerun()
+                        # Definimos las pestañas que pediste
+                        tab_cim, tab_pos, tab_her, tab_ten = st.tabs(["🧱 Cimentación", "🗼 Postes", "🛠️ Herrajes", "⚡ Tendidos"])
+
+                        # --- PESTAÑA 1: CIMENTACIÓN ---
+                        with tab_cim:
+                            st.subheader("Fase de Obra Civil")
+                            c1, c2 = st.columns([1, 2])
+                            ec, fc = safe_val(d, 3), safe_val(d, 5)
+                            c1.info(f"Tipo Cimentación: {ec}")
+                            
+                            if fc: 
+                                c2.success(f"✅ Ejecutado el: {fc}")
+                            elif c2.button("Grabar CIMENTACIÓN", use_container_width=True):
+                                guardar_prod_con_nota_compleja(nom, hj, fr, 5, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, bk)
+                                if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
+                                st.session_state.prod_dia[it].append("CIM"); st.rerun()
+
+                        # --- PESTAÑA 2: POSTES (Con Robot) ---
+                        with tab_pos:
+                            st.subheader("Montaje de Estructura")
+                            c1, c2 = st.columns([1, 2])
+                            ep, fp = safe_val(d, 6), safe_val(d, 8)
+                            c1.info(f"Tipo Poste: {ep}")
+                            
+                            if st.session_state.chk_comp and fp:
+                                c2.success(f"✅ TERMINADO: {fp}")
+                                st.info("El poste está bloqueado (Estado: Completo).")
+                            else:
+                                with c2:
+                                    st.write("**Lista de Chequeo:**")
+                                    cc1, cc2, cc3 = st.columns(3)
+                                    st.session_state.chk_giros = cc1.checkbox("Giros", value=st.session_state.chk_giros)
+                                    st.session_state.chk_aisl = cc2.checkbox("Aisladores", value=st.session_state.chk_aisl)
+                                    st.session_state.chk_comp = cc3.checkbox("Completo", value=st.session_state.chk_comp, on_change=on_completo_change)
+                                    
+                                    if st.button("💾 Grabar POSTE", use_container_width=True):
+                                        txt = ""
+                                        estilo = "NORMAL"
+                                        
+                                        if not st.session_state.chk_giros:
+                                            txt += "GIROS FALTAN. "
+                                            estilo = "GIROS"
+                                        if not st.session_state.chk_aisl:
+                                            txt += "AISLADORES FALTAN. "
+                                            estilo = "AISLADORES"
+                                        if st.session_state.chk_comp:
+                                            estilo = "NORMAL"
+
+                                        guardar_prod_con_nota_compleja(nom, hj, fr, 8, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, bk, txt, estilo_letra=estilo)
+                                        if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
+                                        st.session_state.prod_dia[it].append("POSTE"); st.rerun()
+
+                        # --- PESTAÑA 3: HERRAJES (Ménsulas + Anclajes) ---
+                        with tab_her:
+                            st.subheader("Equipamiento (Ménsulas y Anclajes)")
+                            
+                            # 1. Ménsulas
+                            st.markdown("**1. Ménsulas**")
+                            c1, c2 = st.columns([1, 2])
+                            m_desc = f"{safe_val(d,32) or ''} {safe_val(d,33) or ''}".strip()
+                            fm = safe_val(d, 38)
+                            c1.info(f"Tipo: {m_desc or '-'}")
+                            if fm: 
+                                c2.success(f"Hecho: {fm}")
+                            elif c2.button("Grabar MÉNSULA", use_container_width=True):
+                                guardar_prod_con_nota_compleja(nom, hj, fr, 38, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, bk)
+                                if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
+                                st.session_state.prod_dia[it].append("MEN"); st.rerun()
+                            
+                            st.divider()
+
+                            # 2. Anclajes
+                            st.markdown("**2. Anclajes**")
+                            cols_t, cols_f = [18, 21, 24, 27], [20, 23, 26, 29]
+                            typs, cols_escritura, done = [], [], False
+                            for i in range(4):
+                                v = safe_val(d, cols_t[i])
+                                if v:
+                                    typs.append(str(v)); cols_escritura.append(cols_f[i])
+                                    if safe_val(d, cols_f[i]): done = True
+                            
+                            c1, c2 = st.columns([1, 2])
+                            c1.info(f"Tipos: {', '.join(typs) if typs else 'Ninguno'}")
+                            if not typs: 
+                                c2.write("-")
+                            elif done: 
+                                c2.success("✅ Anclajes ya registrados")
+                            elif c2.button("Grabar ANCLAJES", use_container_width=True):
+                                hoy = datetime.now().strftime("%d/%m/%Y")
+                                for c_idx in cols_escritura:
+                                    guardar_prod_con_nota_compleja(nom, hj, fr, c_idx, hoy, st.session_state.veh_glob, bk)
+                                if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
+                                st.session_state.prod_dia[it].append("ANC"); st.rerun()
+
+                        # --- PESTAÑA 4: TENDIDOS (Nueva) ---
+                        with tab_ten:
+                            st.subheader("Fase de Tendido de Cable")
+                            st.info("🚧 Sección preparada para futuros datos de Tendido.")
+                            # Aquí pondremos la lógica de columnas de tendido cuando me digas cuáles son.
+                            st.text_input("Notas de Tendido (Opcional)", key="nota_tendido")
+                            if st.button("Guardar Nota Tendido"):
+                                st.toast("Nota guardada (Simulación)")
