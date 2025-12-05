@@ -582,15 +582,57 @@ with t2:
                         fr = info['fila_excel']
                         d = info['datos']
 
-                        st.markdown(f"### 📍 Trabajando en: {it}")
-                        st.markdown("---")
-
                         # ===========================================================
-                        #       NUEVA ORGANIZACIÓN DE PESTAÑAS
+                        #       NUEVA ORGANIZACIÓN DE 5 PESTAÑAS (RESUMEN PRIMERO)
                         # ===========================================================
                         
-                        # 1. Cimentación | 2. Postes y Anclajes | 3. Ménsulas | 4. Tendidos
-                        tab_cim, tab_pos_anc, tab_men, tab_ten = st.tabs(["🧱 Cimentación", "🗼 Postes y Anclajes", "🔧 Ménsulas", "⚡ Tendidos"])
+                        tab_res, tab_cim, tab_pos_anc, tab_men, tab_ten = st.tabs(["📊 Resumen", "🧱 Cimentación", "🗼 Postes y Anclajes", "🔧 Ménsulas", "⚡ Tendidos"])
+
+                        # --- PESTAÑA 0: RESUMEN GLOBAL ---
+                        with tab_res:
+                            st.markdown(f"### 📋 Estado General: {it}")
+                            st.markdown("---")
+                            
+                            # Lectura de fechas ejecutadas
+                            f_cim_res = safe_val(d, 5)  # Columna E
+                            f_pos_res = safe_val(d, 8)  # Columna H
+                            f_men_res = safe_val(d, 38) # Columna AL
+                            
+                            # Lógica Anclajes para Resumen
+                            cols_t_res, cols_f_res = [18, 21, 24, 27], [20, 23, 26, 29]
+                            tiene_anclajes = False
+                            anclajes_completos = True
+                            for i in range(4):
+                                if safe_val(d, cols_t_res[i]): # Si hay tipo definido
+                                    tiene_anclajes = True
+                                    if not safe_val(d, cols_f_res[i]): # Si falta fecha
+                                        anclajes_completos = False
+
+                            # Diseño en columnas (Dashboard)
+                            cr1, cr2 = st.columns(2)
+                            
+                            with cr1:
+                                if f_cim_res: st.success(f"🧱 **Cimentación:**\n\n✅ {f_cim_res}")
+                                else: st.error("🧱 **Cimentación:**\n\n❌ PENDIENTE")
+                                
+                                if f_pos_res: 
+                                    # Verificamos si hay robot alertando
+                                    if not st.session_state.chk_giros or not st.session_state.chk_aisl:
+                                        st.warning(f"🗼 **Poste:**\n\n⚠️ {f_pos_res} (Faltan remates)")
+                                    else:
+                                        st.success(f"🗼 **Poste:**\n\n✅ {f_pos_res}")
+                                else: st.error("🗼 **Poste:**\n\n❌ PENDIENTE")
+
+                            with cr2:
+                                if not tiene_anclajes:
+                                    st.info("⚓ **Anclajes:**\n\n➖ No Aplica")
+                                elif anclajes_completos:
+                                    st.success("⚓ **Anclajes:**\n\n✅ Completados")
+                                else:
+                                    st.error("⚓ **Anclajes:**\n\n❌ PENDIENTES")
+                                    
+                                if f_men_res: st.success(f"🔧 **Ménsula:**\n\n✅ {f_men_res}")
+                                else: st.error("🔧 **Ménsula:**\n\n❌ PENDIENTE")
 
                         # --- PESTAÑA 1: CIMENTACIÓN ---
                         with tab_cim:
@@ -644,7 +686,7 @@ with t2:
 
                             st.divider()
 
-                            # PARTE B: ANCLAJES (MOVIDO AQUÍ)
+                            # PARTE B: ANCLAJES
                             st.subheader("2. Anclajes")
                             cols_t, cols_f = [18, 21, 24, 27], [20, 23, 26, 29]
                             typs, cols_escritura, done = [], [], False
