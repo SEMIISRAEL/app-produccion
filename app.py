@@ -33,7 +33,7 @@ if 'logged_in' not in st.session_state:
     st.session_state.user_name = "Usuario Tablet"
     st.session_state.user_role = "encargado"
 
-# Variables Globales
+# Variables Globales de Sesión
 if 'ID_ROSTER_ACTIVO' not in st.session_state: st.session_state.ID_ROSTER_ACTIVO = None
 if 'TRAMO_ACTIVO' not in st.session_state: st.session_state.TRAMO_ACTIVO = None
 if 'ARCH_PROD' not in st.session_state: st.session_state.ARCH_PROD = None
@@ -47,6 +47,12 @@ if 'chk_giros' not in st.session_state: st.session_state.chk_giros = False
 if 'chk_aisl' not in st.session_state: st.session_state.chk_aisl = False
 if 'chk_comp' not in st.session_state: st.session_state.chk_comp = False
 if 'last_item_loaded' not in st.session_state: st.session_state.last_item_loaded = None
+
+# Callback para el checkbox completo
+def on_completo_change():
+    if st.session_state.chk_comp:
+        st.session_state.chk_giros = True
+        st.session_state.chk_aisl = True
 
 # ==========================================
 #           CONEXIÓN
@@ -342,12 +348,6 @@ if 'lista_sel' not in st.session_state: st.session_state.lista_sel = []
 if 'prod_dia' not in st.session_state: st.session_state.prod_dia = {}
 if 'veh_glob' not in st.session_state: st.session_state.veh_glob = None
 
-# FUNCIONES CALLBACK PARA CHECKBOXES
-def on_completo_change():
-    if st.session_state.chk_comp:
-        st.session_state.chk_giros = True
-        st.session_state.chk_aisl = True
-
 t1, t2 = st.tabs(["📝 Partes de Trabajo", "🏗️ Producción"])
 
 with t1:
@@ -368,14 +368,22 @@ with t1:
         c5.text_input("Detalle", value=dv.get(ve, "") if dv else "", disabled=True)
         
         st.divider()
-        fl = st.radio("Filtro:", ["TODOS", "OBRA", "ALMACEN"], horizontal=True) # <--- AQUÍ ESTÁ EL CAMBIO (fl)
+        # --- FIX DE VARIABLE: USAMOS 'fl' CONSISTENTEMENTE ---
+        fl = st.radio("Filtro:", ["TODOS", "OBRA", "ALMACEN"], horizontal=True)
         
         with st.spinner("Actualizando personal..."):
             trabs = cargar_trabajadores(st.session_state.ID_ROSTER_ACTIVO)
-        
-        if fl=="ALMACEN": fil = [t for t in trabs if t['tipo']=="ALMACEN"]; def_com=True
-        elif fl=="OBRA": fil = [t for t in trabs if t['tipo']!="ALMACEN"]; def_com=False
-        else: fil = trabs; def_com=False
+            
+        # AHORA SÍ USA LA VARIABLE 'fl' CORRECTA
+        if fl == "ALMACEN": 
+            fil = [t for t in trabs if t['tipo']=="ALMACEN"]
+            def_com = True
+        elif fl == "OBRA": 
+            fil = [t for t in trabs if t['tipo']!="ALMACEN"]
+            def_com = False
+        else: 
+            fil = trabs
+            def_com = False
             
         opc = [""] + [t['display'] for t in fil] if fil else ["Sin personal disponible"]
         trab_sel = st.selectbox("Seleccionar Operario", opc)
@@ -417,100 +425,5 @@ with t1:
             elif not ve: st.error("Elige vehículo")
             else:
                 with st.spinner("Guardando..."):
-                    ok = guardar_parte(fecha_sel, st.session_state.lista_sel, ve, d_para, st.session_state.ID_ROSTER_ACTIVO)
-                    pdf = generar_pdf(str(fecha_sel.date()), ve, st.session_state.lista_sel, d_para, st.session_state.prod_dia)
-                    nm = f"Parte_{fecha_sel.date()}_{ve}.pdf"
-                    try:
-                        if "email" in st.secrets: 
-                            enviar_email(pdf, nm, str(fecha_sel.date()), ve)
-                            ms = "📧 Email enviado"
-                        else: ms = ""
-                    except: ms = "⚠️ Error Email"
-                    if ok:
-                        st.success(f"✅ Guardado. {ms}")
-                        st.download_button("📥 PDF", pdf, nm, "application/pdf")
-                        st.session_state.lista_sel=[]; st.session_state.prod_dia={}; time.sleep(3); st.rerun()
-
-with t2:
-    if not st.session_state.veh_glob: st.warning("⛔ Elige Vehículo en Pestaña 1")
-    elif not st.session_state.TRAMO_ACTIVO: st.warning("⛔ Elige Tramo en menú lateral")
-    else:
-        nom = st.session_state.ARCH_PROD
-        bk = st.session_state.ARCH_BACKUP
-        hjs = obtener_hojas_track_cached(nom)
-        if hjs:
-            hj = st.selectbox("Hoja", hjs, index=None)
-            if hj:
-                with st.spinner("Cargando..."):
-                    datos_completos = cargar_datos_completos_hoja(nom, hj)
-                
-                if datos_completos:
-                    # FILTROS
-                    todos_los_items = datos_completos.values()
-                    list_cim = sorted(list(set(d['datos'][2] for d in todos_los_items if len(d['datos'])>2 and d['datos'][2])))
-                    list_post = sorted(list(set(d['datos'][5] for d in todos_los_items if len(d['datos'])>5 and d['datos'][5])))
-                    set_anc = set()
-                    for d in todos_los_items:
-                        row = d['datos']
-                        for idx in [17, 20, 23, 26]:
-                            if len(row) > idx and row[idx]: set_anc.add(row[idx])
-                    list_anc = sorted(list(set_anc))
-
-                    c_f1, c_f2, c_f3 = st.columns(3)
-                    fil_cim = c_f1.selectbox("Filtro Cimentación", ["Todos"] + list_cim)
-                    fil_post = c_f2.selectbox("Filtro Poste", ["Todos"] + list_post)
-                    fil_anc = c_f3.selectbox("Filtro Anclaje", ["Todos"] + list_anc)
-                    fil_km = st.text_input("Filtro Km")
-
-                    keys_filtradas = []
-                    for k, info in datos_completos.items():
-                        row = info['datos']
-                        if fil_km and fil_km not in str(k): continue
-                        if fil_cim != "Todos":
-                            val_c = row[2] if len(row)>2 else ""
-                            if val_c != fil_cim: continue
-                        if fil_post != "Todos":
-                            val_p = row[5] if len(row)>5 else ""
-                            if val_p != fil_post: continue
-                        if fil_anc != "Todos":
-                            vals_a = [row[i] for i in [17,20,23,26] if len(row)>i]
-                            if fil_anc not in vals_a: continue
-                        keys_filtradas.append(k)
-
-                    it = st.selectbox("Elemento", keys_filtradas)
-                    
-                    if it:
-                        # LÓGICA DE RECARGA DE ESTADO DEL POSTE
-                        if st.session_state.last_item_loaded != it:
-                            st.session_state.last_item_loaded = it
-                            info = datos_completos[it]
-                            fr = info['fila_excel']
-                            # Leer nota actual para saber estado
-                            nota = leer_nota_directa(nom, hj, fr, 8)
-                            
-                            # Estado por defecto
-                            st.session_state.chk_giros = True
-                            st.session_state.chk_aisl = True
-                            st.session_state.chk_comp = False
-                            
-                            if "GIROS FALTAN" in nota: st.session_state.chk_giros = False
-                            if "AISLADORES FALTAN" in nota: st.session_state.chk_aisl = False
-                            
-                            d = info['datos']
-                            fp = safe_val(d, 8)
-                            if fp and "FALTAN" not in nota:
-                                st.session_state.chk_comp = True
-                                st.session_state.chk_giros = True
-                                st.session_state.chk_aisl = True
-
-                        info = datos_completos[it]
-                        fr = info['fila_excel']
-                        d = info['datos']
-                        st.divider()
-                        st.markdown(f"### 📍 {it}")
-                        
-                        c1, c2 = st.columns([1, 2])
-                        ec, fc = safe_val(d, 3), safe_val(d, 5)
-                        c1.info(f"Cim: {ec}")
-                        if
+                    ok = guardar_parte(fecha_sel, st.session_state.lista_sel, ve, d_para, st.session_state.
 
