@@ -792,10 +792,9 @@ with t2:
                                     st.rerun()
                                 except Exception as e: st.error(f"Error: {e}")
 
-                        # --- PESTAÑA 5: WHATSAPP (MANUAL) ---
+                       # --- PESTAÑA 5: WHATSAPP (OPTIMIZADA) ---
                         with tab_wsp:
-                            st.subheader("📲 Reporte por WhatsApp")
-                            st.info("El sistema te prepara un borrador, pero puedes escribir lo que quieras antes de enviar.")
+                            st.subheader("📲 WhatsApp Directo")
                             
                             # 1. Configuración de Contactos
                             agenda = {
@@ -809,32 +808,38 @@ with t2:
                             numero = agenda[contacto]
                             
                             # 2. Generar el BORRADOR Automático
-                            resumen_prod = ""
-                            if st.session_state.prod_dia:
-                                for k, v in st.session_state.prod_dia.items():
-                                    resumen_prod += f"\n- {k}: {', '.join(v)}"
-                            else:
-                                resumen_prod = "\n(Sin producción registrada hoy)"
-                            
-                            vehiculo_txt = st.session_state.veh_glob if st.session_state.veh_glob else "Sin Asignar"
-                            
-                            # Construimos la plantilla
-                            borrador = f"*REPORTE DE OBRA - {datetime.now().strftime('%d/%m/%Y')}*\n"
-                            borrador += f"👷 {st.session_state.user_name} | 🚛 {vehiculo_txt}\n"
-                            borrador += f"----------------------------\n"
-                            borrador += f"*TRABAJOS REALIZADOS:*{resumen_prod}\n"
-                            borrador += f"----------------------------\n"
-                            borrador += f"Incidencias: \n\n"
-                            borrador += f"Material necesario: \n"
-                            
-                            # 3. CUADRO DE TEXTO EDITABLE (Aquí el operario escribe)
-                            mensaje_final = st.text_area("📝 Escribe o edita tu mensaje aquí:", value=borrador, height=300)
-                            
-                            # 4. Codificar y Enviar LO QUE HAYA ESCRITO EL OPERARIO
-                            import urllib.parse
-                            if st.button("🚀 PREPARAR ENVÍO", type="primary", use_container_width=True):
-                                mensaje_encoded = urllib.parse.quote(mensaje_final)
-                                link_whatsapp = f"https://wa.me/{numero}?text={mensaje_encoded}"
+                            if 'mensaje_base' not in st.session_state:
+                                resumen_prod = ""
+                                if st.session_state.prod_dia:
+                                    for k, v in st.session_state.prod_dia.items():
+                                        resumen_prod += f"\n- {k}: {', '.join(v)}"
+                                else:
+                                    resumen_prod = "\n(Sin producción hoy)"
                                 
-                                st.success("Mensaje listo. Pulsa abajo para abrir WhatsApp:")
-                                st.link_button("👉 ABRIR WHATSAPP", link_whatsapp, type="secondary", use_container_width=True)
+                                vehiculo_txt = st.session_state.veh_glob if st.session_state.veh_glob else "Sin Asignar"
+                                
+                                borrador = f"*REPORTE DE OBRA - {datetime.now().strftime('%d/%m/%Y')}*\n"
+                                borrador += f"👷 {st.session_state.user_name} | 🚛 {vehiculo_txt}\n"
+                                borrador += f"----------------------------\n"
+                                borrador += f"*TRABAJOS:*{resumen_prod}\n"
+                                borrador += f"----------------------------\n"
+                                borrador += f"Notas: \n"
+                                st.session_state.mensaje_base = borrador
+
+                            # Botón para recargar el borrador si ha cambiado algo
+                            if st.button("🔄 Actualizar datos del reporte"):
+                                del st.session_state.mensaje_base
+                                st.rerun()
+
+                            # 3. CUADRO DE TEXTO (El enlace se genera al vuelo)
+                            mensaje_final = st.text_area("Edita el mensaje:", value=st.session_state.mensaje_base, height=250, key="txt_whatsapp")
+                            
+                            # 4. BOTÓN DIRECTO (st.link_button)
+                            # Este botón es un enlace disfrazado. Al pulsarlo abre WhatsApp directamente.
+                            import urllib.parse
+                            mensaje_encoded = urllib.parse.quote(mensaje_final)
+                            link_whatsapp = f"https://wa.me/{numero}?text={mensaje_encoded}"
+                            
+                            st.markdown("---")
+                            st.link_button("📤 ABRIR WHATSAPP Y ENVIAR", link_whatsapp, type="primary", use_container_width=True)
+                            st.caption("Nota: Al pulsar, se abrirá WhatsApp con el texto pegado. Solo tendrás que darle a la flecha de enviar.")
