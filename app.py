@@ -24,9 +24,15 @@ st.set_page_config(page_title="SEMI Tablet", layout="wide", page_icon="🏗️")
 
 st.markdown("""
 <style>
+    /* Estilo Botones Menú */
     .big-button { width: 100%; height: 120px; border-radius: 15px; font-size: 20px; font-weight: bold; margin-bottom: 10px; }
-    div.stButton > button { width: 100%; border-radius: 10px; height: 3em; font-weight: bold; }
+    /* Estilo General Botones */
+    div.stButton > button { width: 100%; border-radius: 10px; height: 3.5em; font-weight: bold; }
+    /* Títulos */
     .main-title { text-align: center; font-size: 2.5rem; color: #333; margin-bottom: 20px; }
+    /* Cajas de Estado */
+    .stSuccess { background-color: #d4edda; }
+    .stError { background-color: #f8d7da; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -47,7 +53,7 @@ if 'veh_glob' not in st.session_state: st.session_state.veh_glob = None
 if 'lista_sel' not in st.session_state: st.session_state.lista_sel = []
 if 'prod_dia' not in st.session_state: st.session_state.prod_dia = {}
 
-# Variables Checkbox
+# Variables Checkbox (Producción)
 if 'chk_giros' not in st.session_state: st.session_state.chk_giros = False
 if 'chk_aisl' not in st.session_state: st.session_state.chk_aisl = False
 if 'chk_comp' not in st.session_state: st.session_state.chk_comp = False
@@ -63,7 +69,7 @@ def on_completo_change():
         st.session_state.chk_aisl = True
 
 # ==========================================
-# 3. CONEXIÓN Y ROBOT
+# 3. CONEXIÓN Y ROBOT (FORMATOS)
 # ==========================================
 @st.cache_resource
 def get_gspread_client():
@@ -225,7 +231,7 @@ def cargar_trabajadores(id_roster):
             if not uid or "id" in uid.lower(): continue
             tipo = "OBRA"
             if len(fila) > 2 and ("A" == str(fila[2]).upper() or "ALMACEN" in str(fila[2]).upper()): tipo = "ALMACEN"
-            if len(fila) > col_dia and fila[col_dia]: continue
+            # Solo añadimos si NO tiene horas ya imputadas (opcional, aquí lo quitamos para que salgan todos)
             lista.append({"display": f"{uid} - {nom}", "tipo": tipo, "id": uid, "nombre_solo": nom})
         return lista
     except: return []
@@ -238,7 +244,7 @@ def obtener_hojas_track_cached(nombre_archivo):
     except: return []
 
 # ==========================================
-# 5. FUNCIONES PDF Y EMAIL
+# 5. FUNCIONES PDF Y GUARDADO PARTES
 # ==========================================
 def generar_pdf(fecha, jefe, lista, para, prod):
     b = BytesIO()
@@ -250,8 +256,14 @@ def generar_pdf(fecha, jefe, lista, para, prod):
     y -= 40
     c.drawString(50, y, "PERSONAL:"); y -= 20
     for t in lista:
-        c.drawString(60, y, f"- {t['Nombre']} ({t['Total_Horas']}h)")
+        c.drawString(60, y, f"- {t['Nombre']} ({t['Total_Horas']}h) [{t['Turno_Letra']}]")
         y -= 15
+    
+    if para:
+        y -= 20; c.setFillColor(colors.red)
+        c.drawString(50, y, f"PARALIZACIÓN: {para['inicio']} - {para['fin']} ({para['duracion']}h) | {para['motivo']}")
+        c.setFillColor(colors.black); y -= 20
+
     y -= 20
     c.drawString(50, y, "PRODUCCIÓN:"); y -= 20
     if prod:
@@ -289,6 +301,12 @@ def guardar_parte(fecha, lista, vehiculo, para, id_roster):
                 upds.append(gspread.Cell(r, c_idx+1, t['Total_Horas']))
             except: pass
         if upds: ws.update_cells(upds)
+        if para:
+            try: wp = sh.worksheet("Paralizaciones")
+            except: 
+                wp = sh.add_worksheet("Paralizaciones", 1000, 10)
+                wp.append_row(["Fecha", "Vehiculo", "Inicio", "Fin", "Duracion", "Motivo"])
+            wp.append_row([str(fecha.date()), vehiculo, para['inicio'], para['fin'], para['duracion'], para['motivo']])
         return True
     except: return False
 
@@ -324,7 +342,7 @@ with st.sidebar:
         st.rerun()
 
 # ==========================================
-# 7. PANTALLAS
+# 7. PANTALLAS PRINCIPALES
 # ==========================================
 
 def mostrar_home():
@@ -366,40 +384,63 @@ def mostrar_pantalla_partes():
     
     st.divider()
     
-    # AÑADIR TRABAJADORES (FUNCIONALIDAD RESTAURADA)
+    # --- FILTRO Y AÑADIR OPERARIOS (RECUPERADO) ---
+    fl = st.radio("Filtro:", ["TODOS", "OBRA", "ALMACEN"], horizontal=True)
     trabs = cargar_trabajadores(st.session_state.ID_ROSTER_ACTIVO)
-    opc = [""] + [t['display'] for t in trabs]
+    
+    if fl=="ALMACEN": fil = [t for t in trabs if t['tipo']=="ALMACEN"]; def_com=True
+    elif fl=="OBRA": fil = [t for t in trabs if t['tipo']!="ALMACEN"]; def_com=False
+    else: fil = trabs; def_com=False
+    
+    opc = [""] + [t['display'] for t in fil] if fil else ["Sin personal"]
     
     c_sel, c_add = st.columns([3, 1])
     trab_sel = c_sel.selectbox("Seleccionar Operario", opc)
     
-    ch1, ch2, ch3 = st.columns(3)
+    ch1, ch2, ch3, ch4 = st.columns(4)
     h_ini = ch1.time_input("Inicio", datetime.strptime("07:00", "%H:%M").time())
     h_fin = ch2.time_input("Fin", datetime.strptime("16:00", "%H:%M").time())
     turno = ch3.selectbox("Turno", ["AUT", "D", "N"])
+    comida = ch4.checkbox("-1h Comida", value=def_com)
     
     if c_add.button("➕ AÑADIR", use_container_width=True):
         if trab_sel and trab_sel != "":
             t1 = datetime.combine(fecha_sel, h_ini); t2 = datetime.combine(fecha_sel, h_fin)
             if t2 < t1: t2 += timedelta(days=1)
             ht = (t2-t1).seconds/3600
+            en, tl = False, "D"
+            if turno=="N" or (turno=="AUT" and (h_ini.hour>=21 or h_ini.hour<=4)): en, tl = True, "N"
+            if comida: ht = max(0, ht-1)
+            
             pid = trab_sel.split(" - ")[0]; pnom = trab_sel.split(" - ")[1]
-            tl = "N" if turno=="N" else "D"
-            st.session_state.lista_sel.append({"ID": pid, "Nombre": pnom, "Total_Horas": round(ht,2), "Turno_Letra": tl, "H_Inicio": str(h_ini), "H_Fin": str(h_fin)})
+            st.session_state.lista_sel.append({"ID": pid, "Nombre": pnom, "Total_Horas": round(ht,2), "Turno_Letra": tl, "H_Inicio": str(h_ini), "H_Fin": str(h_fin), "Es_Noche": en})
     
-    # TABLA Y GUARDADO
+    # --- TABLA Y PARALIZACIÓN ---
     if st.session_state.lista_sel:
-        st.table(pd.DataFrame(st.session_state.lista_sel))
+        st.markdown("### 📋 Cuadrilla:")
+        st.dataframe(pd.DataFrame(st.session_state.lista_sel)[["ID", "Nombre", "Total_Horas", "Turno_Letra"]], use_container_width=True)
         if st.button("🗑️ Borrar Lista"): st.session_state.lista_sel = []; st.rerun()
         
+        st.markdown("---")
+        with st.expander("🛑 Registrar Paralización (Opcional)"):
+            cp1, cp2, cp3 = st.columns([1,1,2])
+            pi = cp1.time_input("Inicio Parada")
+            pf = cp2.time_input("Fin Parada")
+            pm = cp3.text_input("Motivo")
+            para = None
+            if pm:
+                d1, d2 = datetime.combine(hoy, pi), datetime.combine(hoy, pf)
+                para = {"inicio": str(pi), "fin": str(pf), "duracion": round((d2-d1).seconds/3600, 2), "motivo": pm}
+
         if st.button("💾 GUARDAR Y GENERAR PDF", type="primary", use_container_width=True):
             if ve:
-                guardar_parte(fecha_sel, st.session_state.lista_sel, ve, None, st.session_state.ID_ROSTER_ACTIVO)
-                pdf = generar_pdf(str(fecha_sel.date()), ve, st.session_state.lista_sel, None, st.session_state.prod_dia)
-                enviar_email(pdf, f"Parte_{fecha_sel.date()}.pdf")
-                st.success("✅ Guardado correctamente")
-                st.download_button("Descargar PDF", pdf, "parte.pdf", "application/pdf")
-                st.session_state.lista_sel = []
+                with st.spinner("Guardando..."):
+                    ok = guardar_parte(fecha_sel, st.session_state.lista_sel, ve, para, st.session_state.ID_ROSTER_ACTIVO)
+                    pdf = generar_pdf(str(fecha_sel.date()), ve, st.session_state.lista_sel, para, st.session_state.prod_dia)
+                    if ok:
+                        st.success("✅ Guardado correctamente")
+                        st.download_button("📥 Descargar PDF", pdf, f"Parte_{fecha_sel.date()}.pdf", "application/pdf")
+                        st.session_state.lista_sel = []; st.session_state.prod_dia = {}
             else:
                 st.error("Selecciona Vehículo")
 
@@ -410,16 +451,16 @@ def mostrar_pantalla_produccion():
     with c_tit:
         st.title("🏗️ Registro de Producción")
 
-    # SALVAVIDAS VEHICULO
+    # --- SALVAVIDAS: Selector de Vehículo si no está seleccionado ---
     if not st.session_state.veh_glob:
-        st.warning("⚠️ No has seleccionado vehículo.")
+        st.error("⚠️ Falta seleccionar el Vehículo.")
         dv = cargar_vehiculos_dict()
         nv = [""] + list(dv.keys()) if dv else ["Error"]
         ve = st.selectbox("Selecciona Vehículo ahora:", nv)
         if ve:
             st.session_state.veh_glob = ve
             st.rerun()
-        return 
+        return # DETIENE LA EJECUCIÓN HASTA QUE ELIJA
 
     if not st.session_state.TRAMO_ACTIVO:
         st.error("⚠️ Selecciona un Tramo en la barra lateral izquierda.")
@@ -432,10 +473,11 @@ def mostrar_pantalla_produccion():
     if hjs:
         hj = st.selectbox("Seleccionar Hoja de Control:", hjs)
         if hj:
-            with st.spinner("Cargando datos..."):
+            with st.spinner("Cargando datos de obra..."):
                 datos = cargar_datos_completos_hoja(nom, hj)
             
             if datos:
+                # LISTAS
                 list_perfiles_ordenada = list(datos.keys())
                 todos_v = datos.values()
                 
@@ -449,6 +491,7 @@ def mostrar_pantalla_produccion():
                     fil_post = cf2.selectbox("Tipo Poste", ["Todos"] + list_post)
                     fil_km = cf3.text_input("Buscar Km:")
                 
+                # FILTRADO
                 keys_ok = []
                 for k, inf in datos.items():
                     r = inf['datos']
@@ -460,7 +503,7 @@ def mostrar_pantalla_produccion():
                 it = st.selectbox("📍 SELECCIONAR PERFIL / POSTE:", keys_ok)
                 
                 if it:
-                    # LOGICA ROBOT
+                    # LOGICA ROBOT (ESTADO)
                     if st.session_state.last_item_loaded != it:
                         st.session_state.last_item_loaded = it
                         info = datos[it]; fr, d = info['fila_excel'], info['datos']
@@ -480,7 +523,7 @@ def mostrar_pantalla_produccion():
                         elif est_det=="GIROS": st.session_state.chk_comp=False; st.session_state.chk_giros=False; st.session_state.chk_aisl=True
                         elif est_det=="AISLADORES": st.session_state.chk_comp=False; st.session_state.chk_giros=True; st.session_state.chk_aisl=False
 
-                    # UI
+                    # UI PRODUCCION
                     info = datos[it]; fr = info['fila_excel']; d = info['datos']; nm_p = safe_val(d, 6)
                     
                     t_res, t_cim, t_pos, t_men, t_ten = st.tabs(["📊 Resumen", "🧱 Cimentación", "🗼 Postes", "🔧 Ménsulas", "⚡ Tendidos"])
@@ -555,7 +598,9 @@ def procesar_tramo(nom, hj, bk, datos, lista_perf, ini, fin, estilo, it_act):
         for i, perf in enumerate(sublista):
             if perf in datos:
                 fr = datos[perf]['fila_excel']
+                # LOGICA: Solo escribimos fecha en el PRIMERO y ULTIMO del tramo
                 val = hoy if (i==0 or i==len(sublista)-1) else ""
+                
                 guardar_prod_con_nota_compleja(nom, hj, fr, 39, val, st.session_state.veh_glob, bk, f"Tramo {ini}-{fin}", estilo)
                 bar.progress((i+1)/len(sublista))
         
@@ -573,8 +618,9 @@ def mostrar_whatsapp():
         st.title("🔒 WhatsApp Seguro")
     
     agenda_segura = {
-        "Tablet 01": "972500000001",
-        "Oficina": "972500000000"
+        "Tablet 01": "972000000001",
+        "Tablet 02": "972000000002",
+        "Oficina": "972000000000"
     }
     
     c1, c2 = st.columns([2, 1])
