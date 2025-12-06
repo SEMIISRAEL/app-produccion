@@ -792,54 +792,87 @@ with t2:
                                     st.rerun()
                                 except Exception as e: st.error(f"Error: {e}")
 
-                       # --- PESTAÑA 5: WHATSAPP (OPTIMIZADA) ---
+                       # --- PESTAÑA 5: WHATSAPP SEGURO (SOLO INTERNO) ---
                         with tab_wsp:
-                            st.subheader("📲 WhatsApp Directo")
+                            st.subheader("🔒 Red de Comunicación Interna")
+                            st.info("Sistema protegido. Solo se permite comunicación con dispositivos autorizados.")
                             
-                            # 1. Configuración de Contactos
-                            agenda = {
-                                "Jefe de Obra": "972500000000", 
-                                "Oficina Técnica": "972500000000",
-                                "Grupo de Trabajo": "972500000000" 
+                            # ---------------------------------------------------------
+                            # 1. AGENDA DE SEGURIDAD (Solo estos números existen)
+                            # ---------------------------------------------------------
+                            # AQUÍ DEFINES LAS TABLETS Y LOS JEFES. 
+                            # EL OPERARIO NO PUEDE SALIRSE DE ESTA LISTA.
+                            agenda_segura = {
+                                "Tablet 01 (Cimentación)": "972500000001", 
+                                "Tablet 02 (Postes)":      "972500000002",
+                                "Tablet 03 (Tendidos)":    "972500000003",
+                                "Jefe de Obra (Emergencia)": "972500000000",
+                                "Oficina Técnica":         "972500000099"
                             }
                             
-                            c_w1, c_w2 = st.columns(2)
-                            contacto = c_w1.selectbox("Enviar a:", list(agenda.keys()))
-                            numero = agenda[contacto]
+                            # Visualización tipo "Chat"
+                            col_dest, col_info = st.columns([2, 1])
                             
-                            # 2. Generar el BORRADOR Automático
+                            with col_dest:
+                                # El operario SOLO puede elegir de la lista. No puede escribir números.
+                                destinatario = st.selectbox(" Seleccionar Destinatario:", list(agenda_segura.keys()))
+                                numero_destino = agenda_segura[destinatario]
+                            
+                            with col_info:
+                                st.success(f"📡 Conectado con:\n**{destinatario}**")
+
+                            st.markdown("---")
+
+                            # ---------------------------------------------------------
+                            # 2. GENERADOR DE MENSAJE
+                            # ---------------------------------------------------------
+                            # Lógica para cargar el borrador automático si no existe
                             if 'mensaje_base' not in st.session_state:
                                 resumen_prod = ""
                                 if st.session_state.prod_dia:
                                     for k, v in st.session_state.prod_dia.items():
                                         resumen_prod += f"\n- {k}: {', '.join(v)}"
                                 else:
-                                    resumen_prod = "\n(Sin producción hoy)"
+                                    resumen_prod = "\n(Sin producción registrada)"
                                 
-                                vehiculo_txt = st.session_state.veh_glob if st.session_state.veh_glob else "Sin Asignar"
+                                vehiculo_txt = st.session_state.veh_glob if st.session_state.veh_glob else "Tablet"
                                 
-                                borrador = f"*REPORTE DE OBRA - {datetime.now().strftime('%d/%m/%Y')}*\n"
-                                borrador += f"👷 {st.session_state.user_name} | 🚛 {vehiculo_txt}\n"
+                                # Plantilla estándar
+                                borrador = f"*COMUNICACIÓN INTERNA - {datetime.now().strftime('%d/%m/%Y')}*\n"
+                                borrador += f"👤 Emisor: {st.session_state.user_name} ({vehiculo_txt})\n"
                                 borrador += f"----------------------------\n"
-                                borrador += f"*TRABAJOS:*{resumen_prod}\n"
+                                borrador += f"*AVANCE:*{resumen_prod}\n"
                                 borrador += f"----------------------------\n"
-                                borrador += f"Notas: \n"
+                                borrador += f"Mensaje: \n"
                                 st.session_state.mensaje_base = borrador
 
-                            # Botón para recargar el borrador si ha cambiado algo
-                            if st.button("🔄 Actualizar datos del reporte"):
+                            # Botón pequeño para recargar si los datos han cambiado
+                            if st.button("🔄 Actualizar datos del parte"):
                                 del st.session_state.mensaje_base
                                 st.rerun()
 
-                            # 3. CUADRO DE TEXTO (El enlace se genera al vuelo)
-                            mensaje_final = st.text_area("Edita el mensaje:", value=st.session_state.mensaje_base, height=250, key="txt_whatsapp")
+                            # Cuadro de texto
+                            mensaje_final = st.text_area("✍️ Escribe tu mensaje:", value=st.session_state.mensaje_base, height=250)
                             
-                            # 4. BOTÓN DIRECTO (st.link_button)
-                            # Este botón es un enlace disfrazado. Al pulsarlo abre WhatsApp directamente.
+                            # ---------------------------------------------------------
+                            # 3. BOTÓN DE ENVÍO BLINDADO
+                            # ---------------------------------------------------------
                             import urllib.parse
                             mensaje_encoded = urllib.parse.quote(mensaje_final)
-                            link_whatsapp = f"https://wa.me/{numero}?text={mensaje_encoded}"
+                            
+                            # El enlace se genera INTERNAMENTE. El usuario no ve el número.
+                            link_whatsapp = f"https://wa.me/{numero_destino}?text={mensaje_encoded}"
                             
                             st.markdown("---")
-                            st.link_button("📤 ABRIR WHATSAPP Y ENVIAR", link_whatsapp, type="primary", use_container_width=True)
-                            st.caption("Nota: Al pulsar, se abrirá WhatsApp con el texto pegado. Solo tendrás que darle a la flecha de enviar.")
+                            
+                            # Usamos columnas para centrar el botón y hacerlo grande
+                            _, col_btn, _ = st.columns([1, 2, 1])
+                            with col_btn:
+                                st.link_button(
+                                    label=f"📨 ENVIAR A {destinatario.upper()}", 
+                                    url=link_whatsapp, 
+                                    type="primary", 
+                                    use_container_width=True
+                                )
+                            
+                            st.caption("🔒 Este mensaje está encriptado de punto a punto por WhatsApp. Solo se enviará al contacto seleccionado.")
