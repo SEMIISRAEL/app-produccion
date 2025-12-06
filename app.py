@@ -16,6 +16,7 @@ from email.mime.base import MIMEBase
 from email import encoders
 from gspread.utils import rowcol_to_a1
 import urllib.parse
+import base64  # <--- NUEVO: NECESARIO PARA LEER PDFS LOCALES
 
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Gestor SEMI - Tablet", layout="wide", page_icon="🏗️")
@@ -123,7 +124,7 @@ def on_completo_change():
 def ir_a_home(): st.session_state.current_page = "HOME"
 def ir_a_partes(): st.session_state.current_page = "PARTES"
 def ir_a_produccion(): st.session_state.current_page = "PRODUCCION"
-def ir_a_mensulas(): st.session_state.current_page = "MENSULAS" # NUEVA FUNCION
+def ir_a_mensulas(): st.session_state.current_page = "MENSULAS"
 
 # ==========================================
 #            CONEXIÓN GOOGLE
@@ -472,7 +473,6 @@ if st.session_state.current_page == "HOME":
     st.markdown("<h1 style='text-align: center;'>🚧 GESTOR DE OBRA SEMI 🚧</h1>", unsafe_allow_html=True)
     st.markdown("---")
     
-    # --- REORGANIZACIÓN EN 3 COLUMNAS PARA EL NUEVO BOTÓN ---
     col_1, col_2, col_3 = st.columns(3)
     
     with col_1:
@@ -505,7 +505,6 @@ elif st.session_state.current_page == "PARTES":
         
     st.title("📝 Partes de Trabajo")
     
-    # Verificación de Seguridad
     if not st.session_state.veh_glob:
         st.error("⛔ ¡ALTO! Selecciona tu VEHÍCULO en el menú de la izquierda para continuar.")
     else:
@@ -522,7 +521,6 @@ elif st.session_state.current_page == "PARTES":
             
             st.divider()
             
-            # Formulario Operarios
             fl = st.radio("Filtro:", ["TODOS", "OBRA", "ALMACEN"], horizontal=True)
             trabs = cargar_trabajadores(st.session_state.ID_ROSTER_ACTIVO)
             if fl=="ALMACEN": fil = [t for t in trabs if t['tipo']=="ALMACEN"]; def_com=True
@@ -589,13 +587,11 @@ elif st.session_state.current_page == "PRODUCCION":
 
     st.title("🏗️ Producción de Obra")
     
-    # Verificación de Seguridad
     if not st.session_state.veh_glob:
         st.error("⛔ SELECCIONA TU VEHÍCULO EN EL MENÚ IZQUIERDO.")
     elif not st.session_state.TRAMO_ACTIVO:
         st.error("⛔ SELECCIONA EL TRAMO EN EL MENÚ IZQUIERDO.")
     else:
-        # Lógica de carga
         nom = st.session_state.ARCH_PROD
         bk = st.session_state.ARCH_BACKUP
         hjs = obtener_hojas_track_cached(nom)
@@ -606,7 +602,6 @@ elif st.session_state.current_page == "PRODUCCION":
                     datos_completos = cargar_datos_completos_hoja(nom, hj)
                 
                 if datos_completos:
-                    # Preparación de Listas
                     todos_los_items = datos_completos.values()
                     list_perfiles_ordenada = list(datos_completos.keys())
                     list_cim = sorted(list(set(d['datos'][2] for d in todos_los_items if len(d['datos'])>2 and d['datos'][2])))
@@ -618,7 +613,6 @@ elif st.session_state.current_page == "PRODUCCION":
                             if len(row) > idx and row[idx]: set_anc.add(row[idx])
                     list_anc = sorted(list(set_anc))
 
-                    # Filtros
                     c_f1, c_f2, c_f3 = st.columns(3)
                     fil_cim = c_f1.selectbox("Filtro Cimentación", ["Todos"] + list_cim)
                     fil_post = c_f2.selectbox("Filtro Poste", ["Todos"] + list_post)
@@ -640,11 +634,9 @@ elif st.session_state.current_page == "PRODUCCION":
                             if fil_anc not in vals_a: continue
                         keys_filtradas.append(k)
 
-                    # Selector
                     it = st.selectbox("Perfil a Trabajar", keys_filtradas)
                     
                     if it:
-                        # Robot de Lectura
                         if st.session_state.last_item_loaded != it:
                             st.session_state.last_item_loaded = it
                             info = datos_completos[it]
@@ -672,7 +664,6 @@ elif st.session_state.current_page == "PRODUCCION":
                             
                             st.session_state.estado_tendido_actual = estilo_tendido 
 
-                        # Carga UI
                         info = datos_completos[it]
                         fr = info['fila_excel']
                         d = info['datos']
@@ -787,7 +778,6 @@ elif st.session_state.current_page == "PRODUCCION":
                             if it in list_perfiles_ordenada: idx_def = list_perfiles_ordenada.index(it)
                             col_sel1, col_sel2 = st.columns(2)
                             
-                            # SOLUCIÓN: KEY ÚNICA PARA EVITAR RECARGAS
                             p_ini = col_sel1.selectbox("Desde Perfil:", list_perfiles_ordenada, index=idx_def, key=f"s_ini_{it}")
                             p_fin = col_sel2.selectbox("Hasta Perfil:", list_perfiles_ordenada, index=idx_def, key=f"s_fin_{it}")
                             
@@ -866,30 +856,15 @@ elif st.session_state.current_page == "MENSULAS":
         st.rerun()
 
     st.title("📐 Visor Técnico de Ménsulas")
-    
-    # DICCIONARIO DE PLANOS:
-    # IMPORTANTE: Aquí debes poner tus enlaces reales de Google Drive o de tu servidor.
-    # Si usas Drive, asegúrate de que el enlace sea público (Cualquiera con el enlace puede ver).
-    CATALOGO_PDF = {
-        "Ménsula Tipo A - Estándar": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
-        "Ménsula Tipo B - Reforzada": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
-        "Detalle de Anclaje M24": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
-        "Plano General de Trazado": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
-    }
-    
-    seleccion = st.selectbox("📂 Selecciona el Plano / Ficha Técnica:", list(CATALOGO_PDF.keys()))
-    
-    if seleccion:
-        url_pdf = CATALOGO_PDF[seleccion]
-        st.info(f"Visualizando: **{seleccion}**")
-        
-        # Opción 1: Enlace directo (Más seguro)
-        st.link_button("📥 Abrir PDF en Pantalla Completa", url_pdf, type="primary")
-        
-        # Opción 2: Intentar embeber (Puede fallar con Drive si no se configura bien)
-        st.markdown(f'<iframe src="{url_pdf}" class="pdf-frame"></iframe>', unsafe_allow_html=True)
-        
-    st.markdown("---")
-    st.caption("Nota: Para agregar más planos, edita la lista 'CATALOGO_PDF' en el código.")
+    st.info("Sube el archivo PDF de la ménsula o plano que deseas consultar.")
 
+    uploaded_file = st.file_uploader("📂 Buscar archivo PDF en el dispositivo", type="pdf")
 
+    if uploaded_file is not None:
+        # Convertir el archivo PDF a base64 para mostrarlo en el iframe
+        base64_pdf = base64.b64encode(uploaded_file.read()).decode('utf-8')
+        
+        # Mostrar PDF
+        pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" class="pdf-frame"></iframe>'
+        st.markdown(pdf_display, unsafe_allow_html=True)
+        st.success(f"✅ Visualizando: {uploaded_file.name}")
