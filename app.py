@@ -1,4 +1,4 @@
-import streamlit as st
+iimport streamlit as st
 import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -20,9 +20,12 @@ import urllib.parse
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Gestor SEMI - Tablet", layout="wide", page_icon="🏗️")
 
-# Estilos CSS
+# ==========================================
+#      ESTILOS CSS (TAMAÑO DOBLE)
+# ==========================================
 st.markdown("""
 <style>
+    /* 1. Botones GRANDES para la portada */
     .big-button {
         width: 100%;
         height: 150px !important;
@@ -34,12 +37,41 @@ st.markdown("""
         align-items: center;
         justify_content: center;
     }
+    
+    /* 2. Botones normales más altos */
     .stButton button {
         width: 100%;
-        height: 60px;
-        font-size: 18px;
-        font-weight: bold;
+        height: 70px !important; /* Más altura para el dedo */
+        font-size: 20px !important; /* Letra más grande */
+        font-weight: bold !important;
     }
+
+    /* 3. SELECTORES (Cotenes) MÁS GRANDES */
+    /* Caja del selector */
+    div[data-baseweb="select"] > div {
+        min-height: 60px !important;
+        border-radius: 10px !important;
+    }
+    /* Texto dentro del selector */
+    div[data-baseweb="select"] span {
+        font-size: 22px !important; 
+        line-height: 22px !important;
+    }
+    
+    /* 4. Inputs de Texto MÁS GRANDES */
+    div[data-baseweb="input"] > div {
+        min-height: 60px !important;
+    }
+    input[data-baseweb="input"] {
+        font-size: 22px !important;
+    }
+
+    /* 5. Etiquetas (Labels) más grandes */
+    label[data-testid="stWidgetLabel"] p {
+        font-size: 18px !important;
+        font-weight: bold !important;
+    }
+
     /* Resaltar barra lateral */
     [data-testid="stSidebar"] {
         background-color: #f0f2f6;
@@ -740,8 +772,11 @@ elif st.session_state.current_page == "PRODUCCION":
                             idx_def = 0
                             if it in list_perfiles_ordenada: idx_def = list_perfiles_ordenada.index(it)
                             col_sel1, col_sel2 = st.columns(2)
-                            p_ini = col_sel1.selectbox("Desde Perfil:", list_perfiles_ordenada, index=idx_def)
-                            p_fin = col_sel2.selectbox("Hasta Perfil:", list_perfiles_ordenada, index=idx_def)
+                            
+                            # AQUÍ ESTÁ LA SOLUCIÓN AL SALTO: AGREGAMOS KEY ÚNICA
+                            p_ini = col_sel1.selectbox("Desde Perfil:", list_perfiles_ordenada, index=idx_def, key=f"sel_ini_{it}")
+                            p_fin = col_sel2.selectbox("Hasta Perfil:", list_perfiles_ordenada, index=idx_def, key=f"sel_fin_{it}")
+                            
                             fecha_tendido = datetime.now().strftime("%d/%m/%Y")
                             cb1, cb2 = st.columns(2)
                             btn_t = cb1.button("🚀 TENDIDO (Azul)", use_container_width=True)
@@ -809,5 +844,3 @@ elif st.session_state.current_page == "PRODUCCION":
                             _, col_btn, _ = st.columns([1, 2, 1])
                             with col_btn: st.link_button(label=f"📨 ENVIAR A {destinatario.upper()}", url=link_whatsapp, type="primary", use_container_width=True)
                             st.caption("🔒 Este mensaje está encriptado de punto a punto por WhatsApp.")
-
-
