@@ -1,4 +1,4 @@
-iimport streamlit as st
+import streamlit as st
 import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -844,3 +844,4 @@ elif st.session_state.current_page == "PRODUCCION":
                             _, col_btn, _ = st.columns([1, 2, 1])
                             with col_btn: st.link_button(label=f"📨 ENVIAR A {destinatario.upper()}", url=link_whatsapp, type="primary", use_container_width=True)
                             st.caption("🔒 Este mensaje está encriptado de punto a punto por WhatsApp.")
+
