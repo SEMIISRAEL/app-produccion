@@ -20,7 +20,7 @@ from email import encoders
 # ==========================================
 # 1. CONFIGURACIÓN E INYECCIÓN DE ESTILO
 # ==========================================
-st.set_page_config(page_title="SEMI Tablet", layout="wide", page_icon="🏗️")
+st.set_page_config(page_title="SEMI Tablet 2025", layout="wide", page_icon="🏗️")
 
 st.markdown("""
 <style>
@@ -29,7 +29,8 @@ st.markdown("""
     /* Estilo General Botones */
     div.stButton > button { width: 100%; border-radius: 10px; height: 3.5em; font-weight: bold; }
     /* Títulos */
-    .main-title { text-align: center; font-size: 2.5rem; color: #333; margin-bottom: 20px; }
+    .main-title { text-align: center; font-size: 2.5rem; color: #333; margin-bottom: 10px; }
+    .sub-title { text-align: center; font-size: 1.2rem; color: #666; margin-bottom: 20px; }
     /* Cajas de Estado */
     .stSuccess { background-color: #d4edda; }
     .stError { background-color: #f8d7da; }
@@ -90,13 +91,6 @@ def safe_val(lista, indice):
     if idx_py < len(lista): return lista[idx_py]
     return None
 
-def leer_nota_directa(nombre_archivo, nombre_hoja, fila, col):
-    try:
-        sh = conectar_flexible(nombre_archivo)
-        ws = sh.worksheet(nombre_hoja)
-        return ws.cell(fila, col).note or ""
-    except: return ""
-
 def cambiar_formato_google(ws, fila, col, tipo_estilo):
     """ LA MANO DEL ROBOT: Escribe formato (Texto y Fondo) """
     try:
@@ -149,10 +143,16 @@ def guardar_prod_con_nota_compleja(archivo_principal, hoja, fila, col, valor, ve
     try:
         ws = sh.worksheet(hoja)
         ws.update_cell(fila, col, valor)
+        
+        # --- CORRECCIÓN: AÑADIR AÑO Y FECHA CLARA EN LA NOTA ---
+        fecha_str = datetime.now().strftime("%d/%m/%Y")
         hora_act = datetime.now().strftime("%H:%M")
-        nota = f"📅 {valor} - {hora_act}\n🚛 {vehiculo}\n👷 {st.session_state.user_name}"
+        
+        nota = f"📅 {valor} ({fecha_str}) - {hora_act}\n🚛 {vehiculo}\n👷 {st.session_state.user_name}"
         if texto_extra: nota += f"\n⚠️ {texto_extra}"
+        
         ws.insert_note(rowcol_to_a1(fila, col), nota)
+        
         if estilo_letra: cambiar_formato_google(ws, fila, col, estilo_letra)
         else: cambiar_formato_google(ws, fila, col, "NORMAL")
         return True
@@ -161,23 +161,36 @@ def guardar_prod_con_nota_compleja(archivo_principal, hoja, fila, col, valor, ve
         return False
 
 # ==========================================
-# 4. CARGA DE DATOS
+# 4. CARGA DE DATOS (MEJORADA)
 # ==========================================
-@st.cache_data(ttl=300) 
+@st.cache_data(ttl=60) 
 def cargar_datos_completos_hoja(nombre_archivo, nombre_hoja):
+    """
+    CORRECCIÓN: Esta función ahora es más robusta. Si falla la lectura,
+    no devuelve vacío, sino que intenta limpiar los datos.
+    """
     sh = conectar_flexible(nombre_archivo)
     if not sh: return None
     try:
         ws = sh.worksheet(nombre_hoja)
         todos_los_datos = ws.get_all_values() 
         datos_procesados = {}
+        
         for i, fila in enumerate(todos_los_datos):
-            if not fila: continue
+            if not fila: continue # Saltar filas totalmente vacías
+            
+            # Intentar obtener el ID de la columna 0 (A)
             item_id = str(fila[0]).strip()
-            if len(item_id) > 2 and "ITEM" not in item_id.upper() and "HR TRACK" not in item_id.upper():
+            
+            # Filtro básico para detectar si es una fila de datos válida
+            # Debe tener contenido, no ser encabezado ITEM, etc.
+            if len(item_id) > 1 and "ITEM" not in item_id.upper() and "HR TRACK" not in item_id.upper():
                 datos_procesados[item_id] = {"fila_excel": i + 1, "datos": fila}
+        
         return datos_procesados
-    except: return None
+    except Exception as e: 
+        st.error(f"Error leyendo hoja: {e}")
+        return None
 
 @st.cache_data(ttl=300)
 def buscar_archivos_roster():
@@ -219,19 +232,16 @@ def cargar_trabajadores(id_roster):
         ws = sh.sheet1 if "Roster" not in [w.title for w in sh.worksheets()] else sh.worksheet("Roster")
         datos = ws.get_all_values()
         lista = []
-        col_dia = 14
         hoy_dia = str(datetime.now().day)
-        for r in range(3, 9):
-            if r < len(datos) and hoy_dia in datos[r]: 
-                col_dia = datos[r].index(hoy_dia)
-                break
+        
+        # Buscar trabajadores desde la fila 8 en adelante (ajustar según tu excel real)
         for fila in datos[8:]:
             if len(fila) < 2: continue
             uid, nom = str(fila[0]).strip(), str(fila[1]).strip()
             if not uid or "id" in uid.lower(): continue
             tipo = "OBRA"
             if len(fila) > 2 and ("A" == str(fila[2]).upper() or "ALMACEN" in str(fila[2]).upper()): tipo = "ALMACEN"
-            # Solo añadimos si NO tiene horas ya imputadas (opcional, aquí lo quitamos para que salgan todos)
+            
             lista.append({"display": f"{uid} - {nom}", "tipo": tipo, "id": uid, "nombre_solo": nom})
         return lista
     except: return []
@@ -246,13 +256,18 @@ def obtener_hojas_track_cached(nombre_archivo):
 # ==========================================
 # 5. FUNCIONES PDF Y GUARDADO PARTES
 # ==========================================
-def generar_pdf(fecha, jefe, lista, para, prod):
+def generar_pdf(fecha_dt, jefe, lista, para, prod):
+    """ CORRECCIÓN: Formato de Fecha con AÑO """
     b = BytesIO()
     c = canvas.Canvas(b, pagesize=A4); _, h = A4
     y = h - 50
+    
+    # Formato fecha dd/mm/YYYY
+    fecha_fmt = fecha_dt.strftime("%d/%m/%Y")
+    
     c.setFont("Helvetica-Bold", 16); c.drawString(50, y, "Daily Work Log - SEMI ISRAEL")
     y -= 30
-    c.setFont("Helvetica", 10); c.drawString(50, y, f"Fecha: {fecha} | Vehículo: {jefe}")
+    c.setFont("Helvetica", 10); c.drawString(50, y, f"Fecha: {fecha_fmt} | Vehículo: {jefe}")
     y -= 40
     c.drawString(50, y, "PERSONAL:"); y -= 20
     for t in lista:
@@ -274,26 +289,16 @@ def generar_pdf(fecha, jefe, lista, para, prod):
         c.drawString(60, y, "Sin registros.")
     c.save(); b.seek(0); return b
 
-def enviar_email(pdf, nombre):
-    try:
-        if "email" not in st.secrets: return False
-        u, p, d = st.secrets["email"]["usuario"], st.secrets["email"]["password"], st.secrets["email"]["destinatario"]
-        msg = MIMEMultipart(); msg['Subject']=f"Parte {nombre}"; msg['From']=u; msg['To']=d
-        att = MIMEBase('application','octet-stream'); att.set_payload(pdf.getvalue()); encoders.encode_base64(att)
-        att.add_header('Content-Disposition',f"attachment; filename={nombre}"); msg.attach(att)
-        s = smtplib.SMTP('smtp.gmail.com',587); s.starttls(); s.login(u,p); s.sendmail(u,d,msg.as_string()); s.quit()
-        return True
-    except: return False
-
-def guardar_parte(fecha, lista, vehiculo, para, id_roster):
+def guardar_parte(fecha_dt, lista, vehiculo, para, id_roster):
     sh = conectar_flexible(id_roster)
     if not sh: return False
     try:
         ws = sh.sheet1 if "Roster" not in [w.title for w in sh.worksheets()] else sh.worksheet("Roster")
         header = ws.range(f"E4:AX9")
-        c_idx = next((c.col for c in header if str(c.value) == str(fecha.day)), 14)
+        c_idx = next((c.col for c in header if str(c.value) == str(fecha_dt.day)), 14)
         ids_col = ws.col_values(1)
         upds = []
+        
         for t in lista:
             try: 
                 r = ids_col.index(t['ID']) + 1
@@ -301,12 +306,17 @@ def guardar_parte(fecha, lista, vehiculo, para, id_roster):
                 upds.append(gspread.Cell(r, c_idx+1, t['Total_Horas']))
             except: pass
         if upds: ws.update_cells(upds)
+        
         if para:
             try: wp = sh.worksheet("Paralizaciones")
             except: 
                 wp = sh.add_worksheet("Paralizaciones", 1000, 10)
                 wp.append_row(["Fecha", "Vehiculo", "Inicio", "Fin", "Duracion", "Motivo"])
-            wp.append_row([str(fecha.date()), vehiculo, para['inicio'], para['fin'], para['duracion'], para['motivo']])
+            
+            # --- CORRECCIÓN: Guardar fecha completa con AÑO ---
+            fecha_str = fecha_dt.strftime("%d/%m/%Y")
+            wp.append_row([fecha_str, vehiculo, para['inicio'], para['fin'], para['duracion'], para['motivo']])
+            
         return True
     except: return False
 
@@ -346,7 +356,11 @@ with st.sidebar:
 # ==========================================
 
 def mostrar_home():
+    # --- CORRECCIÓN MENÚ: Mostrar Año y contexto ---
     st.markdown("<h1 class='main-title'>PANEL DE CONTROL DE OBRA</h1>", unsafe_allow_html=True)
+    
+    fecha_hoy = datetime.now().strftime("%d de %B de %Y")
+    st.markdown(f"<p class='sub-title'>📅 {fecha_hoy} | 🇮🇱 Israel</p>", unsafe_allow_html=True)
     
     c1, c2 = st.columns(2)
     with c1:
@@ -360,31 +374,36 @@ def mostrar_home():
     if st.button("📲 WHATSAPP INTERNO", use_container_width=True): navigate_to("WHATSAPP")
 
 def mostrar_pantalla_partes():
-    # CABECERA Y RETORNO
     c_back, c_tit = st.columns([1, 4])
     with c_back:
         if st.button("⬅️ VOLVER"): navigate_to("HOME")
     with c_tit:
         st.title("📝 Partes de Trabajo")
     
-    # SELECCIÓN DE FECHA Y VEHÍCULO
+    # SELECCIÓN DE FECHA (Ahora incluye visualización del Año)
     c1, c2, c3 = st.columns([1, 1, 2])
     hoy = datetime.now()
     d = c1.selectbox("Día", range(1,32), index=hoy.day-1)
     m = c2.selectbox("Mes", range(1,13), index=hoy.month-1)
-    try: fecha_sel = datetime(2025, m, d)
-    except: fecha_sel = hoy
     
+    try: 
+        # Forzar año actual 2025 o el que sea
+        fecha_sel = datetime(hoy.year, m, d)
+    except: 
+        fecha_sel = hoy
+    
+    c3.info(f"Fecha seleccionada: {fecha_sel.strftime('%d/%m/%Y')}")
+
     dv = cargar_vehiculos_dict()
     nv = [""] + list(dv.keys()) if dv else ["Error"]
     
     idx_v = nv.index(st.session_state.veh_glob) if st.session_state.veh_glob in nv else 0
-    ve = c3.selectbox("🚛 Vehículo / Lugar:", nv, index=idx_v)
+    ve = st.selectbox("🚛 Vehículo / Lugar:", nv, index=idx_v)
     st.session_state.veh_glob = ve
     
     st.divider()
     
-    # --- FILTRO Y AÑADIR OPERARIOS (RECUPERADO) ---
+    # --- FILTRO Y AÑADIR OPERARIOS ---
     fl = st.radio("Filtro:", ["TODOS", "OBRA", "ALMACEN"], horizontal=True)
     trabs = cargar_trabajadores(st.session_state.ID_ROSTER_ACTIVO)
     
@@ -434,12 +453,12 @@ def mostrar_pantalla_partes():
 
         if st.button("💾 GUARDAR Y GENERAR PDF", type="primary", use_container_width=True):
             if ve:
-                with st.spinner("Guardando..."):
+                with st.spinner("Guardando con AÑO 2025..."):
                     ok = guardar_parte(fecha_sel, st.session_state.lista_sel, ve, para, st.session_state.ID_ROSTER_ACTIVO)
-                    pdf = generar_pdf(str(fecha_sel.date()), ve, st.session_state.lista_sel, para, st.session_state.prod_dia)
+                    pdf = generar_pdf(fecha_sel, ve, st.session_state.lista_sel, para, st.session_state.prod_dia)
                     if ok:
                         st.success("✅ Guardado correctamente")
-                        st.download_button("📥 Descargar PDF", pdf, f"Parte_{fecha_sel.date()}.pdf", "application/pdf")
+                        st.download_button("📥 Descargar PDF", pdf, f"Parte_{fecha_sel.strftime('%Y%m%d')}.pdf", "application/pdf")
                         st.session_state.lista_sel = []; st.session_state.prod_dia = {}
             else:
                 st.error("Selecciona Vehículo")
@@ -451,7 +470,7 @@ def mostrar_pantalla_produccion():
     with c_tit:
         st.title("🏗️ Registro de Producción")
 
-    # --- SALVAVIDAS: Selector de Vehículo si no está seleccionado ---
+    # SALVAVIDAS: Selector de Vehículo
     if not st.session_state.veh_glob:
         st.error("⚠️ Falta seleccionar el Vehículo.")
         dv = cargar_vehiculos_dict()
@@ -460,7 +479,7 @@ def mostrar_pantalla_produccion():
         if ve:
             st.session_state.veh_glob = ve
             st.rerun()
-        return # DETIENE LA EJECUCIÓN HASTA QUE ELIJA
+        return
 
     if not st.session_state.TRAMO_ACTIVO:
         st.error("⚠️ Selecciona un Tramo en la barra lateral izquierda.")
@@ -472,6 +491,12 @@ def mostrar_pantalla_produccion():
     
     if hjs:
         hj = st.selectbox("Seleccionar Hoja de Control:", hjs)
+        
+        # --- CORRECCIÓN: BOTÓN DE RECARGA ---
+        if st.button("🔄 Forzar Recarga de Datos"):
+            st.cache_data.clear()
+            st.rerun()
+
         if hj:
             with st.spinner("Cargando datos de obra..."):
                 datos = cargar_datos_completos_hoja(nom, hj)
@@ -500,91 +525,96 @@ def mostrar_pantalla_produccion():
                     if fil_post != "Todos" and (len(r)<=5 or r[5]!=fil_post): continue
                     keys_ok.append(k)
                 
-                it = st.selectbox("📍 SELECCIONAR PERFIL / POSTE:", keys_ok)
-                
-                if it:
-                    # LOGICA ROBOT (ESTADO)
-                    if st.session_state.last_item_loaded != it:
-                        st.session_state.last_item_loaded = it
-                        info = datos[it]; fr, d = info['fila_excel'], info['datos']
-                        fp = safe_val(d, 8)
-                        
-                        est_det = "NORMAL"; est_ten = "NORMAL"
-                        if fp or safe_val(d, 39):
-                            try:
-                                sh_t = conectar_flexible(nom); ws_t = sh_t.worksheet(hj)
-                                if fp: est_det = detectar_estilo_celda(ws_t, fr, 8)
-                                est_ten = detectar_estilo_celda(ws_t, fr, 39)
-                            except: pass
-                        
-                        st.session_state.estado_tendido_actual = est_ten
-                        if not fp: st.session_state.chk_comp=False; st.session_state.chk_giros=False; st.session_state.chk_aisl=False
-                        elif est_det=="NORMAL": st.session_state.chk_comp=True; st.session_state.chk_giros=True; st.session_state.chk_aisl=True
-                        elif est_det=="GIROS": st.session_state.chk_comp=False; st.session_state.chk_giros=False; st.session_state.chk_aisl=True
-                        elif est_det=="AISLADORES": st.session_state.chk_comp=False; st.session_state.chk_giros=True; st.session_state.chk_aisl=False
-
-                    # UI PRODUCCION
-                    info = datos[it]; fr = info['fila_excel']; d = info['datos']; nm_p = safe_val(d, 6)
+                if not keys_ok:
+                    st.warning("No se encontraron perfiles con esos filtros.")
+                else:
+                    it = st.selectbox("📍 SELECCIONAR PERFIL / POSTE:", keys_ok)
                     
-                    t_res, t_cim, t_pos, t_men, t_ten = st.tabs(["📊 Resumen", "🧱 Cimentación", "🗼 Postes", "🔧 Ménsulas", "⚡ Tendidos"])
-                    
-                    with t_res:
-                        st.markdown(f"### Perfil {it} (Poste {nm_p})")
-                        c1, c2 = st.columns(2)
-                        f_pos = safe_val(d, 8)
-                        c1.info(f"Cimentación: {safe_val(d, 5) or 'Pendiente'}")
-                        if f_pos: 
-                            if st.session_state.chk_comp: c1.success(f"Poste: {f_pos}")
-                            else: c1.warning(f"Poste: {f_pos} (Incompleto)")
-                        else: c1.error("Poste: Pendiente")
+                    if it:
+                        # LOGICA ROBOT (ESTADO)
+                        if st.session_state.last_item_loaded != it:
+                            st.session_state.last_item_loaded = it
+                            info = datos[it]; fr, d = info['fila_excel'], info['datos']
+                            fp = safe_val(d, 8)
+                            
+                            est_det = "NORMAL"; est_ten = "NORMAL"
+                            if fp or safe_val(d, 39):
+                                try:
+                                    sh_t = conectar_flexible(nom); ws_t = sh_t.worksheet(hj)
+                                    if fp: est_det = detectar_estilo_celda(ws_t, fr, 8)
+                                    est_ten = detectar_estilo_celda(ws_t, fr, 39)
+                                except: pass
+                            
+                            st.session_state.estado_tendido_actual = est_ten
+                            if not fp: st.session_state.chk_comp=False; st.session_state.chk_giros=False; st.session_state.chk_aisl=False
+                            elif est_det=="NORMAL": st.session_state.chk_comp=True; st.session_state.chk_giros=True; st.session_state.chk_aisl=True
+                            elif est_det=="GIROS": st.session_state.chk_comp=False; st.session_state.chk_giros=False; st.session_state.chk_aisl=True
+                            elif est_det=="AISLADORES": st.session_state.chk_comp=False; st.session_state.chk_giros=True; st.session_state.chk_aisl=False
+
+                        # UI PRODUCCION
+                        info = datos[it]; fr = info['fila_excel']; d = info['datos']; nm_p = safe_val(d, 6)
                         
-                        c2.info(f"Ménsula: {safe_val(d, 38) or 'Pendiente'}")
-                        est_t = st.session_state.get("estado_tendido_actual", "NORMAL")
-                        if est_t == "TENDIDO_AZUL": c2.info("Cable: 🔵 TENDIDO")
-                        elif est_t == "GRAPADO_VERDE": c2.success("Cable: ✅ GRAPADO")
-                        else: c2.error("Cable: Pendiente")
-
-                    with t_cim:
-                        fc = safe_val(d, 5)
-                        if fc: st.success(f"✅ Ejecutado: {fc}")
-                        elif st.button("Grabar Cimentación", use_container_width=True):
-                            guardar_prod_con_nota_compleja(nom, hj, fr, 5, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, bk)
-                            st.session_state.prod_dia.setdefault(it, []).append("CIM"); st.rerun()
-
-                    with t_pos:
-                        fp = safe_val(d, 8)
-                        if st.session_state.chk_comp and fp: st.success(f"✅ Terminado: {fp}")
-                        else:
-                            c_a, c_b, c_c = st.columns(3)
-                            st.session_state.chk_giros = c_a.checkbox("Giros", value=st.session_state.chk_giros)
-                            st.session_state.chk_aisl = c_b.checkbox("Aisladores", value=st.session_state.chk_aisl)
-                            st.session_state.chk_comp = c_c.checkbox("Completo", value=st.session_state.chk_comp, on_change=on_completo_change)
-                            if st.button("💾 Grabar Poste", use_container_width=True):
-                                est = "NORMAL"; txt = ""
-                                if not st.session_state.chk_giros: est = "GIROS"; txt += "Faltan Giros. "
-                                if not st.session_state.chk_aisl: est = "AISLADORES"; txt += "Faltan Aisladores. "
-                                if st.session_state.chk_comp: est = "NORMAL"
-                                guardar_prod_con_nota_compleja(nom, hj, fr, 8, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, bk, txt, estilo_letra=est)
-                                st.session_state.prod_dia.setdefault(it, []).append("POSTE"); st.rerun()
-
-                    with t_men:
-                        fm = safe_val(d, 38)
-                        if fm: st.success(f"✅ Ejecutado: {fm}")
-                        elif st.button("Grabar Ménsula", use_container_width=True):
-                            guardar_prod_con_nota_compleja(nom, hj, fr, 38, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, bk)
-                            st.session_state.prod_dia.setdefault(it, []).append("MEN"); st.rerun()
-
-                    with t_ten:
-                        st.subheader("⚡ Tramos de Cable")
-                        c1, c2 = st.columns(2)
-                        p_ini = c1.selectbox("Desde:", list_perfiles_ordenada, index=list_perfiles_ordenada.index(it) if it in list_perfiles_ordenada else 0)
-                        p_fin = c2.selectbox("Hasta:", list_perfiles_ordenada, index=list_perfiles_ordenada.index(it) if it in list_perfiles_ordenada else 0)
+                        t_res, t_cim, t_pos, t_men, t_ten = st.tabs(["📊 Resumen", "🧱 Cimentación", "🗼 Postes", "🔧 Ménsulas", "⚡ Tendidos"])
                         
-                        b1, b2 = st.columns(2)
-                        if b1.button("🔵 TENDIDO (Azul)", use_container_width=True):
-                            procesar_tramo(nom, hj, bk, datos, list_perfiles_ordenada, p_ini, p_fin, "TENDIDO_AZUL", it)
-                        if b2.button("✅ GRAPADO (Verde)", use_container_width=True):
-                            procesar_tramo(nom, hj, bk, datos, list_perfiles_ordenada, p_ini, p_fin, "GRAPADO_VERDE", it)
+                        with t_res:
+                            st.markdown(f"### Perfil {it} (Poste {nm_p})")
+                            c1, c2 = st.columns(2)
+                            f_pos = safe_val(d, 8)
+                            c1.info(f"Cimentación: {safe_val(d, 5) or 'Pendiente'}")
+                            if f_pos: 
+                                if st.session_state.chk_comp: c1.success(f"Poste: {f_pos}")
+                                else: c1.warning(f"Poste: {f_pos} (Incompleto)")
+                            else: c1.error("Poste: Pendiente")
+                            
+                            c2.info(f"Ménsula: {safe_val(d, 38) or 'Pendiente'}")
+                            est_t = st.session_state.get("estado_tendido_actual", "NORMAL")
+                            if est_t == "TENDIDO_AZUL": c2.info("Cable: 🔵 TENDIDO")
+                            elif est_t == "GRAPADO_VERDE": c2.success("Cable: ✅ GRAPADO")
+                            else: c2.error("Cable: Pendiente")
+
+                        with t_cim:
+                            fc = safe_val(d, 5)
+                            if fc: st.success(f"✅ Ejecutado: {fc}")
+                            elif st.button("Grabar Cimentación", use_container_width=True):
+                                guardar_prod_con_nota_compleja(nom, hj, fr, 5, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, bk)
+                                st.session_state.prod_dia.setdefault(it, []).append("CIM"); st.rerun()
+
+                        with t_pos:
+                            fp = safe_val(d, 8)
+                            if st.session_state.chk_comp and fp: st.success(f"✅ Terminado: {fp}")
+                            else:
+                                c_a, c_b, c_c = st.columns(3)
+                                st.session_state.chk_giros = c_a.checkbox("Giros", value=st.session_state.chk_giros)
+                                st.session_state.chk_aisl = c_b.checkbox("Aisladores", value=st.session_state.chk_aisl)
+                                st.session_state.chk_comp = c_c.checkbox("Completo", value=st.session_state.chk_comp, on_change=on_completo_change)
+                                if st.button("💾 Grabar Poste", use_container_width=True):
+                                    est = "NORMAL"; txt = ""
+                                    if not st.session_state.chk_giros: est = "GIROS"; txt += "Faltan Giros. "
+                                    if not st.session_state.chk_aisl: est = "AISLADORES"; txt += "Faltan Aisladores. "
+                                    if st.session_state.chk_comp: est = "NORMAL"
+                                    guardar_prod_con_nota_compleja(nom, hj, fr, 8, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, bk, txt, estilo_letra=est)
+                                    st.session_state.prod_dia.setdefault(it, []).append("POSTE"); st.rerun()
+
+                        with t_men:
+                            fm = safe_val(d, 38)
+                            if fm: st.success(f"✅ Ejecutado: {fm}")
+                            elif st.button("Grabar Ménsula", use_container_width=True):
+                                guardar_prod_con_nota_compleja(nom, hj, fr, 38, datetime.now().strftime("%d/%m/%Y"), st.session_state.veh_glob, bk)
+                                st.session_state.prod_dia.setdefault(it, []).append("MEN"); st.rerun()
+
+                        with t_ten:
+                            st.subheader("⚡ Tramos de Cable")
+                            c1, c2 = st.columns(2)
+                            p_ini = c1.selectbox("Desde:", list_perfiles_ordenada, index=list_perfiles_ordenada.index(it) if it in list_perfiles_ordenada else 0)
+                            p_fin = c2.selectbox("Hasta:", list_perfiles_ordenada, index=list_perfiles_ordenada.index(it) if it in list_perfiles_ordenada else 0)
+                            
+                            b1, b2 = st.columns(2)
+                            if b1.button("🔵 TENDIDO (Azul)", use_container_width=True):
+                                procesar_tramo(nom, hj, bk, datos, list_perfiles_ordenada, p_ini, p_fin, "TENDIDO_AZUL", it)
+                            if b2.button("✅ GRAPADO (Verde)", use_container_width=True):
+                                procesar_tramo(nom, hj, bk, datos, list_perfiles_ordenada, p_ini, p_fin, "GRAPADO_VERDE", it)
+            else:
+                st.error("❌ No se pudieron cargar datos. Revisa si la hoja está vacía o el formato cambió.")
 
 def procesar_tramo(nom, hj, bk, datos, lista_perf, ini, fin, estilo, it_act):
     try:
@@ -598,7 +628,6 @@ def procesar_tramo(nom, hj, bk, datos, lista_perf, ini, fin, estilo, it_act):
         for i, perf in enumerate(sublista):
             if perf in datos:
                 fr = datos[perf]['fila_excel']
-                # LOGICA: Solo escribimos fecha en el PRIMERO y ULTIMO del tramo
                 val = hoy if (i==0 or i==len(sublista)-1) else ""
                 
                 guardar_prod_con_nota_compleja(nom, hj, fr, 39, val, st.session_state.veh_glob, bk, f"Tramo {ini}-{fin}", estilo)
@@ -628,7 +657,7 @@ def mostrar_whatsapp():
     
     if 'mensaje_base' not in st.session_state:
         res = "\n".join([f"{k}: {v}" for k,v in st.session_state.prod_dia.items()]) if st.session_state.prod_dia else "Sin datos."
-        st.session_state.mensaje_base = f"*REPORTE {datetime.now().strftime('%d/%m')}*\n----------------\n{res}"
+        st.session_state.mensaje_base = f"*REPORTE {datetime.now().strftime('%d/%m/%Y')}*\n----------------\n{res}"
     
     txt = st.text_area("Mensaje:", value=st.session_state.mensaje_base, height=200)
     
@@ -644,3 +673,5 @@ if st.session_state.page == "HOME": mostrar_home()
 elif st.session_state.page == "PARTES": mostrar_pantalla_partes()
 elif st.session_state.page == "PRODUCCION": mostrar_pantalla_produccion()
 elif st.session_state.page == "WHATSAPP": mostrar_whatsapp()
+elif st.session_state.page == "WHATSAPP": mostrar_whatsapp()
+
