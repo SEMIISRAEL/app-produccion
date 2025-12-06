@@ -792,46 +792,49 @@ with t2:
                                     st.rerun()
                                 except Exception as e: st.error(f"Error: {e}")
 
-                        # --- PESTAÑA 5: WHATSAPP ---
+                        # --- PESTAÑA 5: WHATSAPP (MANUAL) ---
                         with tab_wsp:
-                            st.subheader("📲 Reporte Rápido por WhatsApp")
-                            st.info("Genera un mensaje automático con lo que has producido hoy.")
+                            st.subheader("📲 Reporte por WhatsApp")
+                            st.info("El sistema te prepara un borrador, pero puedes escribir lo que quieras antes de enviar.")
                             
-                            # 1. Configuración de Contactos (Añade los números reales con código de país)
-                            # EJEMPLO: Israel es 972, España es 34
+                            # 1. Configuración de Contactos
                             agenda = {
                                 "Jefe de Obra": "972500000000", 
                                 "Oficina Técnica": "972500000000",
                                 "Grupo de Trabajo": "972500000000" 
                             }
                             
-                            contacto = st.selectbox("Enviar a:", list(agenda.keys()))
+                            c_w1, c_w2 = st.columns(2)
+                            contacto = c_w1.selectbox("Enviar a:", list(agenda.keys()))
                             numero = agenda[contacto]
                             
-                            # 2. Generar el Texto Automático
+                            # 2. Generar el BORRADOR Automático
                             resumen_prod = ""
                             if st.session_state.prod_dia:
                                 for k, v in st.session_state.prod_dia.items():
                                     resumen_prod += f"\n- {k}: {', '.join(v)}"
                             else:
-                                resumen_prod = "\n(Sin producción registrada en esta sesión)"
+                                resumen_prod = "\n(Sin producción registrada hoy)"
                             
-                            # Texto final
                             vehiculo_txt = st.session_state.veh_glob if st.session_state.veh_glob else "Sin Asignar"
-                            mensaje = f"*REPORTE DE OBRA - {datetime.now().strftime('%d/%m/%Y')}*\n"
-                            mensaje += f"👷 Encargado: {st.session_state.user_name}\n"
-                            mensaje += f"🚛 Vehículo: {vehiculo_txt}\n"
-                            mensaje += f"----------------------------\n"
-                            mensaje += f"*PRODUCCIÓN REALIZADA:*{resumen_prod}\n"
-                            mensaje += f"----------------------------\n"
-                            mensaje += f"Estado: Finalizado."
                             
-                            # Mostrar previsualización
-                            st.text_area("Previsualización:", value=mensaje, height=200)
+                            # Construimos la plantilla
+                            borrador = f"*REPORTE DE OBRA - {datetime.now().strftime('%d/%m/%Y')}*\n"
+                            borrador += f"👷 {st.session_state.user_name} | 🚛 {vehiculo_txt}\n"
+                            borrador += f"----------------------------\n"
+                            borrador += f"*TRABAJOS REALIZADOS:*{resumen_prod}\n"
+                            borrador += f"----------------------------\n"
+                            borrador += f"Incidencias: \n\n"
+                            borrador += f"Material necesario: \n"
                             
-                            # 3. Codificar para URL
+                            # 3. CUADRO DE TEXTO EDITABLE (Aquí el operario escribe)
+                            mensaje_final = st.text_area("📝 Escribe o edita tu mensaje aquí:", value=borrador, height=300)
+                            
+                            # 4. Codificar y Enviar LO QUE HAYA ESCRITO EL OPERARIO
                             import urllib.parse
-                            mensaje_encoded = urllib.parse.quote(mensaje)
-                            link_whatsapp = f"https://wa.me/{numero}?text={mensaje_encoded}"
-                            
-                            st.link_button("🚀 ABRIR WHATSAPP", link_whatsapp, type="primary", use_container_width=True)
+                            if st.button("🚀 PREPARAR ENVÍO", type="primary", use_container_width=True):
+                                mensaje_encoded = urllib.parse.quote(mensaje_final)
+                                link_whatsapp = f"https://wa.me/{numero}?text={mensaje_encoded}"
+                                
+                                st.success("Mensaje listo. Pulsa abajo para abrir WhatsApp:")
+                                st.link_button("👉 ABRIR WHATSAPP", link_whatsapp, type="secondary", use_container_width=True)
