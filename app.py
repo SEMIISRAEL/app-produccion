@@ -89,30 +89,36 @@ def leer_nota_directa(nombre_archivo, nombre_hoja, fila, col):
 
 def cambiar_formato_google(ws, fila, col, tipo_estilo):
     """
-    LA MANO DEL ROBOT: Escribe formato (Texto y Fondo).
+    LA MANO DEL ROBOT: Aplica Colores de Fondo y Texto.
     """
     try:
-        # Configuración por defecto (Normal)
+        # Configuración base
         formato_texto = {"fontFamily": "Arial", "foregroundColor": {"red": 0.0, "green": 0.0, "blue": 0.0}, "bold": False}
-        formato_fondo = None # Sin fondo
+        formato_fondo = None # Sin fondo por defecto
 
         if tipo_estilo == "GIROS":
-            # Courier + Texto Rojo
+            # Courier + Rojo (Sin fondo)
             formato_texto = {"fontFamily": "Courier New", "foregroundColor": {"red": 1.0, "green": 0.0, "blue": 0.0}, "bold": True}
+        
         elif tipo_estilo == "AISLADORES":
-            # Times + Texto Azul
+            # Times + Azul (Sin fondo)
             formato_texto = {"fontFamily": "Times New Roman", "foregroundColor": {"red": 0.0, "green": 0.0, "blue": 1.0}, "bold": True}
-        elif tipo_estilo == "TENDIDO":
-            # TENDIDO: Texto Negro + FONDO AZUL RELLENO
+        
+        elif tipo_estilo == "TENDIDO_AZUL":
+            # Texto Negro + FONDO AZUL CIELO
             formato_texto = {"fontFamily": "Arial", "foregroundColor": {"red": 0.0, "green": 0.0, "blue": 0.0}, "bold": True}
-            formato_fondo = {"red": 0.6, "green": 0.8, "blue": 1.0} # Azul Cielo
+            formato_fondo = {"red": 0.4, "green": 0.6, "blue": 1.0} 
 
-        # Construimos el objeto de formato
+        elif tipo_estilo == "GRAPADO_VERDE":
+            # Texto Negro + FONDO VERDE CLARO
+            formato_texto = {"fontFamily": "Arial", "foregroundColor": {"red": 0.0, "green": 0.0, "blue": 0.0}, "bold": True}
+            formato_fondo = {"red": 0.4, "green": 0.9, "blue": 0.4} 
+
+        # Construir petición
         user_format = {"textFormat": formato_texto}
         if formato_fondo:
             user_format["backgroundColor"] = formato_fondo
 
-        # IMPORTANTE: Avisamos a Google que vamos a tocar el Color de Fondo también
         campos = "userEnteredFormat(textFormat,backgroundColor)"
 
         body = {
@@ -131,23 +137,33 @@ def cambiar_formato_google(ws, fila, col, tipo_estilo):
         return False
 def detectar_estilo_celda(ws, fila, col):
     """
-    EL OJO DEL ROBOT: Lee el formato para saber qué falta, aunque haya fecha.
+    EL OJO DEL ROBOT: Lee colores de fondo y fuentes.
     """
     try:
         nombre_hoja = ws.title
         rango = f"{nombre_hoja}!{rowcol_to_a1(fila, col)}"
         
-        # Petición especial a la API para traer metadatos
         res = ws.spreadsheet.fetch_sheet_metadata(params={'includeGridData': True, 'ranges': [rango]})
         
         try:
             celda_data = res['sheets'][0]['data'][0]['rowData'][0]['values'][0]
-            formato = celda_data.get('userEnteredFormat', {}).get('textFormat', {})
-            font_family = formato.get('fontFamily', 'Arial')
+            formato = celda_data.get('userEnteredFormat', {})
+            font_family = formato.get('textFormat', {}).get('fontFamily', 'Arial')
+            bg_color = formato.get('backgroundColor', {})
             
-            if 'Courier' in font_family: return "GIROS"      # Detectamos código rojo
-            elif 'Times' in font_family: return "AISLADORES" # Detectamos código azul
-            else: return "NORMAL"
+            # Detectar TENDIDO (Azul) - Si tiene mucho Azul y poco Rojo/Verde
+            if bg_color.get('blue', 0) > 0.8 and bg_color.get('red', 0) < 0.6:
+                return "TENDIDO_AZUL"
+            
+            # Detectar GRAPADO (Verde) - Si tiene mucho Verde
+            if bg_color.get('green', 0) > 0.7 and bg_color.get('blue', 0) < 0.6:
+                return "GRAPADO_VERDE"
+
+            # Detectar Postes (Fuentes)
+            if 'Courier' in font_family: return "GIROS"
+            elif 'Times' in font_family: return "AISLADORES"
+            
+            return "NORMAL"
         except (IndexError, KeyError): return "NORMAL"
     except Exception as e: return "NORMAL"
 
@@ -520,7 +536,7 @@ with t2:
                     # --- PREPARACIÓN DE LISTAS ---
                     todos_los_items = datos_completos.values()
                     
-                    # 1. LISTA DE PERFILES (Columna A)
+                    # 1. LISTA DE PERFILES (Columna A) - ORDEN FÍSICO
                     list_perfiles_ordenada = list(datos_completos.keys())
 
                     # 2. Listas para filtros
@@ -561,7 +577,7 @@ with t2:
                     
                     if it:
                         # -----------------------------------------------------------
-                        # CEREBRO DEL ROBOT (Lectura de Estado)
+                        # CEREBRO DEL ROBOT (Lectura de Estado y Color)
                         # -----------------------------------------------------------
                         if st.session_state.last_item_loaded != it:
                             st.session_state.last_item_loaded = it
@@ -571,32 +587,34 @@ with t2:
                             fp = safe_val(d, 8)
                             
                             estilo_detectado = "NORMAL"
-                            if fp:
+                            estilo_tendido = "NORMAL" # Para saber si es azul o verde
+                            
+                            # Leemos formato de Poste (Col 8) y Tendido (Col 39)
+                            if fp or safe_val(d, 39):
                                 try:
                                     sh_temp = conectar_flexible(nom)
                                     ws_temp = sh_temp.worksheet(hj)
-                                    estilo_detectado = detectar_estilo_celda(ws_temp, fr, 8)
+                                    # Leemos Poste
+                                    if fp: estilo_detectado = detectar_estilo_celda(ws_temp, fr, 8)
+                                    # Leemos Tendido (Col AM = 39)
+                                    estilo_tendido = detectar_estilo_celda(ws_temp, fr, 39)
                                 except: pass
-
+                            
+                            # Estado del Poste
                             if not fp:
-                                st.session_state.chk_comp = False
-                                st.session_state.chk_giros = False
-                                st.session_state.chk_aisl = False
+                                st.session_state.chk_comp = False; st.session_state.chk_giros = False; st.session_state.chk_aisl = False
                             elif estilo_detectado == "NORMAL":
-                                st.session_state.chk_comp = True
-                                st.session_state.chk_giros = True
-                                st.session_state.chk_aisl = True
+                                st.session_state.chk_comp = True; st.session_state.chk_giros = True; st.session_state.chk_aisl = True
                             elif estilo_detectado == "GIROS":
-                                st.session_state.chk_comp = False
-                                st.session_state.chk_giros = False
-                                st.session_state.chk_aisl = True
+                                st.session_state.chk_comp = False; st.session_state.chk_giros = False; st.session_state.chk_aisl = True
                             elif estilo_detectado == "AISLADORES":
-                                st.session_state.chk_comp = False
-                                st.session_state.chk_giros = True
-                                st.session_state.chk_aisl = False
+                                st.session_state.chk_comp = False; st.session_state.chk_giros = True; st.session_state.chk_aisl = False
+                            
+                            # Guardamos estado tendido en variable temporal para mostrarlo en resumen
+                            st.session_state.estado_tendido_actual = estilo_tendido 
 
                         # -----------------------------------------------------------
-                        # CARGA DE DATOS ACTUALES
+                        # CARGA DE DATOS UI
                         # -----------------------------------------------------------
                         info = datos_completos[it]
                         fr = info['fila_excel']
@@ -616,15 +634,16 @@ with t2:
                             f_cim_res = safe_val(d, 5)
                             f_pos_res = safe_val(d, 8)
                             f_men_res = safe_val(d, 38)
-                            f_ten_res = safe_val(d, 39) 
                             
-                            cols_t_res, cols_f_res = [18, 21, 24, 27], [20, 23, 26, 29]
-                            tiene_anclajes = False; anclajes_completos = True
-                            for i in range(4):
-                                if safe_val(d, cols_t_res[i]):
-                                    tiene_anclajes = True
-                                    if not safe_val(d, cols_f_res[i]): anclajes_completos = False
+                            # Leemos nota de la columna Tendido para saber el tramo
+                            nota_tendido = leer_nota_directa(nom, hj, fr, 39)
+                            info_tramo = ""
+                            if "Tramo:" in nota_tendido:
+                                # Extraemos solo la parte del tramo de la nota
+                                try: info_tramo = nota_tendido.split("Tramo:")[1].split("\n")[0].strip()
+                                except: info_tramo = nota_tendido
 
+                            # UI Resumen
                             cr1, cr2 = st.columns(2)
                             with cr1:
                                 if f_cim_res: st.success(f"🧱 **Cim:** ✅ {f_cim_res}")
@@ -637,16 +656,17 @@ with t2:
                                 else: st.error("🗼 **Poste:** ❌")
 
                             with cr2:
-                                if not tiene_anclajes: st.info("⚓ **Anc:** ➖")
-                                elif anclajes_completos: st.success("⚓ **Anc:** ✅")
-                                else: st.error("⚓ **Anc:** ❌")
-                                    
                                 if f_men_res: st.success(f"🔧 **Mén:** ✅ {f_men_res}")
                                 else: st.error("🔧 **Mén:** ❌")
-
-                            st.markdown("---")
-                            if f_ten_res: st.success(f"⚡ **Cable LA-280:** ✅ {f_ten_res}")
-                            else: st.warning("⚡ **Cable LA-280:** ❌ Pendiente")
+                                
+                                # Lógica Visual Tendido
+                                est_ten = st.session_state.get("estado_tendido_actual", "NORMAL")
+                                if est_ten == "TENDIDO_AZUL":
+                                    st.info(f"⚡ **Cable LA-280:**\n\n🔵 TENDIDO (En Proceso)\n\n📍 {info_tramo}")
+                                elif est_ten == "GRAPADO_VERDE":
+                                    st.success(f"⚡ **Cable LA-280:**\n\n✅ GRAPADO (Finalizado)\n\n📍 {info_tramo}")
+                                else:
+                                    st.error("⚡ **Cable LA-280:**\n\n❌ PENDIENTE")
 
                         # --- PESTAÑA 1: CIMENTACIÓN ---
                         with tab_cim:
@@ -718,25 +738,25 @@ with t2:
                         # --- PESTAÑA 4: TENDIDOS (LA-280) ---
                         with tab_ten:
                             st.subheader("⚡ Tendido Cable LA-280")
-                            st.caption("Actualización por Tramos (Selecciona Perfiles)")
                             
                             f_la280 = safe_val(d, 39)
+                            est_ten = st.session_state.get("estado_tendido_actual", "NORMAL")
                             
+                            # Visor de Estado
                             c1, c2 = st.columns([1,2])
-                            if f_la280:
-                                c1.success(f"Estado en {it}:")
-                                c2.success(f"✅ {f_la280}")
+                            if est_ten == "TENDIDO_AZUL":
+                                c1.info("Estado:"); c2.info("🔵 TENDIDO (Falta Grapar)")
+                            elif est_ten == "GRAPADO_VERDE":
+                                c1.success("Estado:"); c2.success("✅ GRAPADO (Finalizado)")
                             else:
-                                c1.warning(f"Estado en {it}:")
-                                c2.error("❌ PENDIENTE")
-                            
+                                c1.warning("Estado:"); c2.error("❌ PENDIENTE")
+
                             st.divider()
-                            st.write("### 🛤️ Registrar Tramo")
+                            st.write("### 🛤️ Gestión de Tramos")
                             
-                            # 1. Selectores usando la LISTA REAL ORDENADA (Columna A)
+                            # Selectores
                             idx_def = 0
-                            if it in list_perfiles_ordenada:
-                                idx_def = list_perfiles_ordenada.index(it)
+                            if it in list_perfiles_ordenada: idx_def = list_perfiles_ordenada.index(it)
                             
                             col_sel1, col_sel2 = st.columns(2)
                             p_ini = col_sel1.selectbox("Desde Perfil:", list_perfiles_ordenada, index=idx_def)
@@ -744,39 +764,54 @@ with t2:
                             
                             fecha_tendido = datetime.now().strftime("%d/%m/%Y")
                             
-                            if st.button("🚀 GRABAR TRAMO LA-280", type="primary", use_container_width=True):
+                            # Botones de Acción (AZUL vs VERDE)
+                            cb1, cb2 = st.columns(2)
+                            btn_t = cb1.button("🚀 TENDIDO (Azul)", use_container_width=True)
+                            btn_g = cb2.button("✅ GRAPADO (Verde)", use_container_width=True)
+
+                            if btn_t or btn_g:
                                 try:
                                     idx_a = list_perfiles_ordenada.index(p_ini)
                                     idx_b = list_perfiles_ordenada.index(p_fin)
-                                    
                                     if idx_a > idx_b: idx_a, idx_b = idx_b, idx_a
                                     
-                                    # Sublista de perfiles
-                                    perfiles_a_actualizar = list_perfiles_ordenada[idx_a : idx_b + 1]
+                                    perfiles_rango = list_perfiles_ordenada[idx_a : idx_b + 1]
+                                    total_p = len(perfiles_rango)
                                     
-                                    st.write(f"⏳ Grabando en {len(perfiles_a_actualizar)} perfiles (Columna AM)...")
+                                    # Definir Estilo y Texto Log
+                                    if btn_t:
+                                        estilo_uso = "TENDIDO_AZUL"
+                                        accion_txt = "TENDIDO"
+                                    else:
+                                        estilo_uso = "GRAPADO_VERDE"
+                                        accion_txt = "GRAPADO"
+
+                                    st.write(f"⏳ Procesando {total_p} perfiles...")
                                     barra = st.progress(0)
                                     
                                     contador = 0
-                                    for perfil_id in perfiles_a_actualizar:
+                                    for i, perfil_id in enumerate(perfiles_rango):
                                         if perfil_id in datos_completos:
                                             fila_real = datos_completos[perfil_id]['fila_excel']
                                             
+                                            # LOGICA DE FECHAS: Solo en primero (i=0) y ultimo (i=total-1)
+                                            es_extremo = (i == 0) or (i == total_p - 1)
+                                            valor_a_escribir = fecha_tendido if es_extremo else ""
+                                            
                                             guardar_prod_con_nota_compleja(
                                                 nom, hj, fila_real, 39, 
-                                                fecha_tendido, st.session_state.veh_glob, bk, 
-                                                texto_extra=f"Tendido LA-280 [{p_ini} -> {p_fin}]",
-                                                estilo_letra="TENDIDO"
+                                                valor_a_escribir, st.session_state.veh_glob, bk, 
+                                                texto_extra=f"Tramo: {p_ini} -> {p_fin}", # Esto ayuda al Resumen
+                                                estilo_letra=estilo_uso
                                             )
                                             contador += 1
-                                            barra.progress(int((contador / len(perfiles_a_actualizar)) * 100))
+                                            barra.progress(int((contador / total_p) * 100))
                                     
-                                    st.success(f"✅ ¡Hecho! {contador} perfiles actualizados.")
+                                    st.success(f"✅ {accion_txt} registrado de {p_ini} a {p_fin}")
                                     time.sleep(2)
-                                    
                                     if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
-                                    st.session_state.prod_dia[it].append(f"Tendido LA-280 ({p_ini}-{p_fin})")
+                                    st.session_state.prod_dia[it].append(f"{accion_txt} ({p_ini}-{p_fin})")
                                     st.rerun()
                                     
                                 except Exception as e:
-                                    st.error(f"Error en el proceso: {e}")
+                                    st.error(f"Error: {e}")
