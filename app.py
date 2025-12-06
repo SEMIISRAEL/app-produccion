@@ -16,13 +16,13 @@ from email.mime.base import MIMEBase
 from email import encoders
 from gspread.utils import rowcol_to_a1
 import urllib.parse
-import base64  # <--- NUEVO: NECESARIO PARA LEER PDFS LOCALES
+import base64 
 
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Gestor SEMI - Tablet", layout="wide", page_icon="🏗️")
 
 # ==========================================
-#      ESTILOS CSS (TAMAÑO DOBLE)
+#      ESTILOS CSS (TAMAÑO DOBLE Y VISOR)
 # ==========================================
 st.markdown("""
 <style>
@@ -75,14 +75,6 @@ st.markdown("""
     [data-testid="stSidebar"] {
         background-color: #f0f2f6;
     }
-    
-    /* Estilo para el Visor PDF (Iframe) */
-    .pdf-frame {
-        width: 100%;
-        height: 800px;
-        border: 2px solid #ccc;
-        border-radius: 10px;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -97,10 +89,8 @@ if 'logged_in' not in st.session_state:
     st.session_state.logged_in = True
     st.session_state.user_name = "Usuario Tablet"
 
-# Navegación
 if 'current_page' not in st.session_state: st.session_state.current_page = "HOME"
 
-# Datos Globales
 if 'ID_ROSTER_ACTIVO' not in st.session_state: st.session_state.ID_ROSTER_ACTIVO = None
 if 'TRAMO_ACTIVO' not in st.session_state: st.session_state.TRAMO_ACTIVO = None
 if 'ARCH_PROD' not in st.session_state: st.session_state.ARCH_PROD = None
@@ -109,7 +99,6 @@ if 'veh_glob' not in st.session_state: st.session_state.veh_glob = None
 if 'lista_sel' not in st.session_state: st.session_state.lista_sel = []
 if 'prod_dia' not in st.session_state: st.session_state.prod_dia = {}
 
-# Checkboxes (Estado visual)
 if 'chk_giros' not in st.session_state: st.session_state.chk_giros = False
 if 'chk_aisl' not in st.session_state: st.session_state.chk_aisl = False
 if 'chk_comp' not in st.session_state: st.session_state.chk_comp = False
@@ -120,7 +109,6 @@ def on_completo_change():
         st.session_state.chk_giros = True
         st.session_state.chk_aisl = True
 
-# Funciones Navegación
 def ir_a_home(): st.session_state.current_page = "HOME"
 def ir_a_partes(): st.session_state.current_page = "PARTES"
 def ir_a_produccion(): st.session_state.current_page = "PRODUCCION"
@@ -861,10 +849,16 @@ elif st.session_state.current_page == "MENSULAS":
     uploaded_file = st.file_uploader("📂 Buscar archivo PDF en el dispositivo", type="pdf")
 
     if uploaded_file is not None:
-        # Convertir el archivo PDF a base64 para mostrarlo en el iframe
-        base64_pdf = base64.b64encode(uploaded_file.read()).decode('utf-8')
-        
-        # Mostrar PDF
-        pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" class="pdf-frame"></iframe>'
-        st.markdown(pdf_display, unsafe_allow_html=True)
-        st.success(f"✅ Visualizando: {uploaded_file.name}")
+        try:
+            # Convertir a Base64
+            base64_pdf = base64.b64encode(uploaded_file.read()).decode('utf-8')
+            
+            # Usar EMBED (Método más compatible con Chrome que iframe)
+            pdf_display = f'<embed src="data:application/pdf;base64,{base64_pdf}" width="100%" height="1000px" type="application/pdf">'
+            
+            # Mostrar
+            st.markdown(pdf_display, unsafe_allow_html=True)
+            st.success(f"✅ Visualizando: {uploaded_file.name}")
+            
+        except Exception as e:
+            st.error(f"Error al cargar el PDF: {e}")
