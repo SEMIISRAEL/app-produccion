@@ -535,11 +535,8 @@ with t2:
                 if datos_completos:
                     # --- PREPARACIÓN DE LISTAS ---
                     todos_los_items = datos_completos.values()
-                    
-                    # 1. LISTA DE PERFILES (Columna A) - ORDEN FÍSICO
                     list_perfiles_ordenada = list(datos_completos.keys())
-
-                    # 2. Listas para filtros
+                    
                     list_cim = sorted(list(set(d['datos'][2] for d in todos_los_items if len(d['datos'])>2 and d['datos'][2])))
                     list_post = sorted(list(set(d['datos'][5] for d in todos_los_items if len(d['datos'])>5 and d['datos'][5])))
                     
@@ -577,7 +574,7 @@ with t2:
                     
                     if it:
                         # -----------------------------------------------------------
-                        # CEREBRO DEL ROBOT (Lectura de Estado y Color)
+                        # CEREBRO DEL ROBOT (Lectura de Estado)
                         # -----------------------------------------------------------
                         if st.session_state.last_item_loaded != it:
                             st.session_state.last_item_loaded = it
@@ -587,20 +584,16 @@ with t2:
                             fp = safe_val(d, 8)
                             
                             estilo_detectado = "NORMAL"
-                            estilo_tendido = "NORMAL" # Para saber si es azul o verde
+                            estilo_tendido = "NORMAL"
                             
-                            # Leemos formato de Poste (Col 8) y Tendido (Col 39)
                             if fp or safe_val(d, 39):
                                 try:
                                     sh_temp = conectar_flexible(nom)
                                     ws_temp = sh_temp.worksheet(hj)
-                                    # Leemos Poste
                                     if fp: estilo_detectado = detectar_estilo_celda(ws_temp, fr, 8)
-                                    # Leemos Tendido (Col AM = 39)
                                     estilo_tendido = detectar_estilo_celda(ws_temp, fr, 39)
                                 except: pass
                             
-                            # Estado del Poste
                             if not fp:
                                 st.session_state.chk_comp = False; st.session_state.chk_giros = False; st.session_state.chk_aisl = False
                             elif estilo_detectado == "NORMAL":
@@ -610,7 +603,6 @@ with t2:
                             elif estilo_detectado == "AISLADORES":
                                 st.session_state.chk_comp = False; st.session_state.chk_giros = True; st.session_state.chk_aisl = False
                             
-                            # Guardamos estado tendido en variable temporal para mostrarlo en resumen
                             st.session_state.estado_tendido_actual = estilo_tendido 
 
                         # -----------------------------------------------------------
@@ -622,10 +614,12 @@ with t2:
                         nombre_poste = safe_val(d, 6) 
 
                         # ===========================================================
-                        #       ORGANIZACIÓN DE PESTAÑAS
+                        #       ORGANIZACIÓN DE PESTAÑAS (AHORA CON WHATSAPP)
                         # ===========================================================
                         
-                        tab_res, tab_cim, tab_pos_anc, tab_men, tab_ten = st.tabs(["📊 Resumen", "🧱 Cimentación", "🗼 Postes y Anclajes", "🔧 Ménsulas", "⚡ Tendidos"])
+                        tab_res, tab_cim, tab_pos_anc, tab_men, tab_ten, tab_wsp = st.tabs([
+                            "📊 Resumen", "🧱 Cimentación", "🗼 Postes/Anc", "🔧 Ménsulas", "⚡ Tendidos", "📲 WhatsApp"
+                        ])
 
                         # --- PESTAÑA 0: RESUMEN ---
                         with tab_res:
@@ -635,15 +629,12 @@ with t2:
                             f_pos_res = safe_val(d, 8)
                             f_men_res = safe_val(d, 38)
                             
-                            # Leemos nota de la columna Tendido para saber el tramo
                             nota_tendido = leer_nota_directa(nom, hj, fr, 39)
                             info_tramo = ""
                             if "Tramo:" in nota_tendido:
-                                # Extraemos solo la parte del tramo de la nota
                                 try: info_tramo = nota_tendido.split("Tramo:")[1].split("\n")[0].strip()
                                 except: info_tramo = nota_tendido
 
-                            # UI Resumen
                             cr1, cr2 = st.columns(2)
                             with cr1:
                                 if f_cim_res: st.success(f"🧱 **Cim:** ✅ {f_cim_res}")
@@ -651,7 +642,7 @@ with t2:
                                 
                                 if f_pos_res: 
                                     if not st.session_state.chk_giros or not st.session_state.chk_aisl:
-                                        st.warning(f"🗼 **Poste:** ⚠️ {f_pos_res} (Pendientes)")
+                                        st.warning(f"🗼 **Poste:** ⚠️ {f_pos_res}")
                                     else: st.success(f"🗼 **Poste:** ✅ {f_pos_res}")
                                 else: st.error("🗼 **Poste:** ❌")
 
@@ -659,14 +650,13 @@ with t2:
                                 if f_men_res: st.success(f"🔧 **Mén:** ✅ {f_men_res}")
                                 else: st.error("🔧 **Mén:** ❌")
                                 
-                                # Lógica Visual Tendido
                                 est_ten = st.session_state.get("estado_tendido_actual", "NORMAL")
                                 if est_ten == "TENDIDO_AZUL":
-                                    st.info(f"⚡ **Cable LA-280:**\n\n🔵 TENDIDO (En Proceso)\n\n📍 {info_tramo}")
+                                    st.info(f"⚡ **Cable:** 🔵 TENDIDO\n\n📍 {info_tramo}")
                                 elif est_ten == "GRAPADO_VERDE":
-                                    st.success(f"⚡ **Cable LA-280:**\n\n✅ GRAPADO (Finalizado)\n\n📍 {info_tramo}")
+                                    st.success(f"⚡ **Cable:** ✅ GRAPADO\n\n📍 {info_tramo}")
                                 else:
-                                    st.error("⚡ **Cable LA-280:**\n\n❌ PENDIENTE")
+                                    st.error("⚡ **Cable:** ❌ PENDIENTE")
 
                         # --- PESTAÑA 1: CIMENTACIÓN ---
                         with tab_cim:
@@ -735,14 +725,12 @@ with t2:
                                 if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
                                 st.session_state.prod_dia[it].append("MEN"); st.rerun()
 
-                        # --- PESTAÑA 4: TENDIDOS (LA-280) ---
+                        # --- PESTAÑA 4: TENDIDOS ---
                         with tab_ten:
                             st.subheader("⚡ Tendido Cable LA-280")
-                            
                             f_la280 = safe_val(d, 39)
                             est_ten = st.session_state.get("estado_tendido_actual", "NORMAL")
                             
-                            # Visor de Estado
                             c1, c2 = st.columns([1,2])
                             if est_ten == "TENDIDO_AZUL":
                                 c1.info("Estado:"); c2.info("🔵 TENDIDO (Falta Grapar)")
@@ -754,7 +742,6 @@ with t2:
                             st.divider()
                             st.write("### 🛤️ Gestión de Tramos")
                             
-                            # Selectores
                             idx_def = 0
                             if it in list_perfiles_ordenada: idx_def = list_perfiles_ordenada.index(it)
                             
@@ -763,8 +750,6 @@ with t2:
                             p_fin = col_sel2.selectbox("Hasta Perfil:", list_perfiles_ordenada, index=idx_def)
                             
                             fecha_tendido = datetime.now().strftime("%d/%m/%Y")
-                            
-                            # Botones de Acción (AZUL vs VERDE)
                             cb1, cb2 = st.columns(2)
                             btn_t = cb1.button("🚀 TENDIDO (Azul)", use_container_width=True)
                             btn_g = cb2.button("✅ GRAPADO (Verde)", use_container_width=True)
@@ -774,44 +759,79 @@ with t2:
                                     idx_a = list_perfiles_ordenada.index(p_ini)
                                     idx_b = list_perfiles_ordenada.index(p_fin)
                                     if idx_a > idx_b: idx_a, idx_b = idx_b, idx_a
-                                    
                                     perfiles_rango = list_perfiles_ordenada[idx_a : idx_b + 1]
                                     total_p = len(perfiles_rango)
                                     
-                                    # Definir Estilo y Texto Log
                                     if btn_t:
-                                        estilo_uso = "TENDIDO_AZUL"
-                                        accion_txt = "TENDIDO"
+                                        estilo_uso = "TENDIDO_AZUL"; accion_txt = "TENDIDO"
                                     else:
-                                        estilo_uso = "GRAPADO_VERDE"
-                                        accion_txt = "GRAPADO"
+                                        estilo_uso = "GRAPADO_VERDE"; accion_txt = "GRAPADO"
 
                                     st.write(f"⏳ Procesando {total_p} perfiles...")
                                     barra = st.progress(0)
-                                    
                                     contador = 0
                                     for i, perfil_id in enumerate(perfiles_rango):
                                         if perfil_id in datos_completos:
                                             fila_real = datos_completos[perfil_id]['fila_excel']
-                                            
-                                            # LOGICA DE FECHAS: Solo en primero (i=0) y ultimo (i=total-1)
                                             es_extremo = (i == 0) or (i == total_p - 1)
                                             valor_a_escribir = fecha_tendido if es_extremo else ""
                                             
                                             guardar_prod_con_nota_compleja(
                                                 nom, hj, fila_real, 39, 
                                                 valor_a_escribir, st.session_state.veh_glob, bk, 
-                                                texto_extra=f"Tramo: {p_ini} -> {p_fin}", # Esto ayuda al Resumen
+                                                texto_extra=f"Tramo: {p_ini} -> {p_fin}",
                                                 estilo_letra=estilo_uso
                                             )
                                             contador += 1
                                             barra.progress(int((contador / total_p) * 100))
                                     
-                                    st.success(f"✅ {accion_txt} registrado de {p_ini} a {p_fin}")
+                                    st.success(f"✅ {accion_txt} registrado.")
                                     time.sleep(2)
                                     if it not in st.session_state.prod_dia: st.session_state.prod_dia[it]=[]
                                     st.session_state.prod_dia[it].append(f"{accion_txt} ({p_ini}-{p_fin})")
                                     st.rerun()
-                                    
-                                except Exception as e:
-                                    st.error(f"Error: {e}")
+                                except Exception as e: st.error(f"Error: {e}")
+
+                        # --- PESTAÑA 5: WHATSAPP ---
+                        with tab_wsp:
+                            st.subheader("📲 Reporte Rápido por WhatsApp")
+                            st.info("Genera un mensaje automático con lo que has producido hoy.")
+                            
+                            # 1. Configuración de Contactos (Añade los números reales con código de país)
+                            # EJEMPLO: Israel es 972, España es 34
+                            agenda = {
+                                "Jefe de Obra": "972500000000", 
+                                "Oficina Técnica": "972500000000",
+                                "Grupo de Trabajo": "972500000000" 
+                            }
+                            
+                            contacto = st.selectbox("Enviar a:", list(agenda.keys()))
+                            numero = agenda[contacto]
+                            
+                            # 2. Generar el Texto Automático
+                            resumen_prod = ""
+                            if st.session_state.prod_dia:
+                                for k, v in st.session_state.prod_dia.items():
+                                    resumen_prod += f"\n- {k}: {', '.join(v)}"
+                            else:
+                                resumen_prod = "\n(Sin producción registrada en esta sesión)"
+                            
+                            # Texto final
+                            vehiculo_txt = st.session_state.veh_glob if st.session_state.veh_glob else "Sin Asignar"
+                            mensaje = f"*REPORTE DE OBRA - {datetime.now().strftime('%d/%m/%Y')}*\n"
+                            mensaje += f"👷 Encargado: {st.session_state.user_name}\n"
+                            mensaje += f"🚛 Vehículo: {vehiculo_txt}\n"
+                            mensaje += f"----------------------------\n"
+                            mensaje += f"*PRODUCCIÓN REALIZADA:*{resumen_prod}\n"
+                            mensaje += f"----------------------------\n"
+                            mensaje += f"Estado: Finalizado."
+                            
+                            # Mostrar previsualización
+                            st.text_area("Previsualización:", value=mensaje, height=200)
+                            
+                            # 3. Codificar para URL
+                            import urllib.parse
+                            mensaje_encoded = urllib.parse.quote(mensaje)
+                            link_whatsapp = f"https://wa.me/{numero}?text={mensaje_encoded}"
+                            
+                            st.link_button("🚀 ABRIR WHATSAPP", link_whatsapp, type="primary", use_container_width=True)
