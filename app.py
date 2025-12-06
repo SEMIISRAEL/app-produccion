@@ -41,18 +41,16 @@ st.markdown("""
     /* 2. Botones normales más altos */
     .stButton button {
         width: 100%;
-        height: 70px !important; /* Más altura para el dedo */
-        font-size: 20px !important; /* Letra más grande */
+        height: 70px !important;
+        font-size: 20px !important;
         font-weight: bold !important;
     }
 
     /* 3. SELECTORES (Cotenes) MÁS GRANDES */
-    /* Caja del selector */
     div[data-baseweb="select"] > div {
         min-height: 60px !important;
         border-radius: 10px !important;
     }
-    /* Texto dentro del selector */
     div[data-baseweb="select"] span {
         font-size: 22px !important; 
         line-height: 22px !important;
@@ -75,6 +73,14 @@ st.markdown("""
     /* Resaltar barra lateral */
     [data-testid="stSidebar"] {
         background-color: #f0f2f6;
+    }
+    
+    /* Estilo para el Visor PDF (Iframe) */
+    .pdf-frame {
+        width: 100%;
+        height: 800px;
+        border: 2px solid #ccc;
+        border-radius: 10px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -117,6 +123,7 @@ def on_completo_change():
 def ir_a_home(): st.session_state.current_page = "HOME"
 def ir_a_partes(): st.session_state.current_page = "PARTES"
 def ir_a_produccion(): st.session_state.current_page = "PRODUCCION"
+def ir_a_mensulas(): st.session_state.current_page = "MENSULAS" # NUEVA FUNCION
 
 # ==========================================
 #            CONEXIÓN GOOGLE
@@ -465,18 +472,25 @@ if st.session_state.current_page == "HOME":
     st.markdown("<h1 style='text-align: center;'>🚧 GESTOR DE OBRA SEMI 🚧</h1>", unsafe_allow_html=True)
     st.markdown("---")
     
-    col_vacio_L, col_btn_1, col_btn_2, col_vacio_R = st.columns([1, 4, 4, 1])
+    # --- REORGANIZACIÓN EN 3 COLUMNAS PARA EL NUEVO BOTÓN ---
+    col_1, col_2, col_3 = st.columns(3)
     
-    with col_btn_1:
-        st.markdown("### 📝 CONTROL DE PERSONAL")
+    with col_1:
+        st.markdown("### 📝 CONTROL PERSONAL")
         if st.button("PARTES DE TRABAJO", key="btn_partes", use_container_width=True):
             ir_a_partes()
             st.rerun()
 
-    with col_btn_2:
+    with col_2:
         st.markdown("### 🏗️ CONTROL DE OBRA")
         if st.button("PRODUCCIÓN", key="btn_prod", use_container_width=True):
             ir_a_produccion()
+            st.rerun()
+
+    with col_3:
+        st.markdown("### 📐 TÉCNICA")
+        if st.button("VISOR MÉNSULAS", key="btn_mensulas", use_container_width=True):
+            ir_a_mensulas()
             st.rerun()
             
     st.markdown("---")
@@ -773,9 +787,9 @@ elif st.session_state.current_page == "PRODUCCION":
                             if it in list_perfiles_ordenada: idx_def = list_perfiles_ordenada.index(it)
                             col_sel1, col_sel2 = st.columns(2)
                             
-                            # AQUÍ ESTÁ LA SOLUCIÓN AL SALTO: AGREGAMOS KEY ÚNICA
-                            p_ini = col_sel1.selectbox("Desde Perfil:", list_perfiles_ordenada, index=idx_def, key=f"sel_ini_{it}")
-                            p_fin = col_sel2.selectbox("Hasta Perfil:", list_perfiles_ordenada, index=idx_def, key=f"sel_fin_{it}")
+                            # SOLUCIÓN: KEY ÚNICA PARA EVITAR RECARGAS
+                            p_ini = col_sel1.selectbox("Desde Perfil:", list_perfiles_ordenada, index=idx_def, key=f"s_ini_{it}")
+                            p_fin = col_sel2.selectbox("Hasta Perfil:", list_perfiles_ordenada, index=idx_def, key=f"s_fin_{it}")
                             
                             fecha_tendido = datetime.now().strftime("%d/%m/%Y")
                             cb1, cb2 = st.columns(2)
@@ -844,4 +858,38 @@ elif st.session_state.current_page == "PRODUCCION":
                             _, col_btn, _ = st.columns([1, 2, 1])
                             with col_btn: st.link_button(label=f"📨 ENVIAR A {destinatario.upper()}", url=link_whatsapp, type="primary", use_container_width=True)
                             st.caption("🔒 Este mensaje está encriptado de punto a punto por WhatsApp.")
+
+# --- PÁGINA 4: VISOR DE MÉNSULAS ---
+elif st.session_state.current_page == "MENSULAS":
+    if st.button("⬅️ VOLVER AL MENÚ PRINCIPAL"):
+        ir_a_home()
+        st.rerun()
+
+    st.title("📐 Visor Técnico de Ménsulas")
+    
+    # DICCIONARIO DE PLANOS:
+    # IMPORTANTE: Aquí debes poner tus enlaces reales de Google Drive o de tu servidor.
+    # Si usas Drive, asegúrate de que el enlace sea público (Cualquiera con el enlace puede ver).
+    CATALOGO_PDF = {
+        "Ménsula Tipo A - Estándar": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+        "Ménsula Tipo B - Reforzada": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+        "Detalle de Anclaje M24": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+        "Plano General de Trazado": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
+    }
+    
+    seleccion = st.selectbox("📂 Selecciona el Plano / Ficha Técnica:", list(CATALOGO_PDF.keys()))
+    
+    if seleccion:
+        url_pdf = CATALOGO_PDF[seleccion]
+        st.info(f"Visualizando: **{seleccion}**")
+        
+        # Opción 1: Enlace directo (Más seguro)
+        st.link_button("📥 Abrir PDF en Pantalla Completa", url_pdf, type="primary")
+        
+        # Opción 2: Intentar embeber (Puede fallar con Drive si no se configura bien)
+        st.markdown(f'<iframe src="{url_pdf}" class="pdf-frame"></iframe>', unsafe_allow_html=True)
+        
+    st.markdown("---")
+    st.caption("Nota: Para agregar más planos, edita la lista 'CATALOGO_PDF' en el código.")
+
 
