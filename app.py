@@ -22,66 +22,39 @@ import base64
 st.set_page_config(page_title="Gestor SEMI - Tablet", layout="wide", page_icon="🏗️")
 
 # ==========================================
-#      ESTILOS CSS (TAMAÑO DOBLE Y VISOR)
+#      ESTILOS CSS (BOTONES GIGANTES Y COLORES)
 # ==========================================
 st.markdown("""
 <style>
-    /* 1. Botones GRANDES para la portada */
-    .big-button {
-        width: 100%;
-        height: 150px !important;
-        font-size: 24px !important;
-        font-weight: bold !important;
-        border-radius: 15px !important;
-        margin-bottom: 20px !important;
-        display: flex;
-        align-items: center;
-        justify_content: center;
-    }
-    
-    /* 2. Botones normales más altos */
+    /* Estilos generales botones */
     .stButton button {
         width: 100%;
         height: 70px !important;
         font-size: 20px !important;
         font-weight: bold !important;
+        border-radius: 12px !important;
     }
-
-    /* 3. SELECTORES (Cotenes) MÁS GRANDES */
+    
+    /* Selectores más grandes para dedos */
     div[data-baseweb="select"] > div {
         min-height: 60px !important;
         border-radius: 10px !important;
+        background-color: #f0f2f6;
     }
     div[data-baseweb="select"] span {
         font-size: 22px !important; 
-        line-height: 22px !important;
     }
     
-    /* 4. Inputs de Texto MÁS GRANDES */
-    div[data-baseweb="input"] > div {
-        min-height: 60px !important;
-    }
-    input[data-baseweb="input"] {
-        font-size: 22px !important;
-    }
-
-    /* 5. Etiquetas (Labels) más grandes */
-    label[data-testid="stWidgetLabel"] p {
-        font-size: 18px !important;
-        font-weight: bold !important;
+    /* Botón Especial para PLANOS (Rojo/Naranja) */
+    .btn-plano {
+        border: 2px solid #ff4b4b !important;
+        background-color: #ffeded !important;
+        color: #ff4b4b !important;
     }
 
     /* Resaltar barra lateral */
     [data-testid="stSidebar"] {
-        background-color: #f0f2f6;
-    }
-    
-    /* Estilo para el Visor PDF */
-    .pdf-object {
-        width: 100%;
-        height: 100vh; /* Altura pantalla completa */
-        border: 2px solid #ccc;
-        border-radius: 10px;
+        background-color: #e8eaf6;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -93,12 +66,8 @@ ID_CONFIG_PROD = "1uCu5pq6l1CjqXKPEkGkN-G5Z5K00qiV9kR_bGOii6FU"
 # ==========================================
 #            ESTADO GLOBAL
 # ==========================================
-if 'logged_in' not in st.session_state:
-    st.session_state.logged_in = True
-    st.session_state.user_name = "Usuario Tablet"
-
+if 'logged_in' not in st.session_state: st.session_state.logged_in = True; st.session_state.user_name = "Usuario Tablet"
 if 'current_page' not in st.session_state: st.session_state.current_page = "HOME"
-
 if 'ID_ROSTER_ACTIVO' not in st.session_state: st.session_state.ID_ROSTER_ACTIVO = None
 if 'TRAMO_ACTIVO' not in st.session_state: st.session_state.TRAMO_ACTIVO = None
 if 'ARCH_PROD' not in st.session_state: st.session_state.ARCH_PROD = None
@@ -106,21 +75,17 @@ if 'ARCH_BACKUP' not in st.session_state: st.session_state.ARCH_BACKUP = None
 if 'veh_glob' not in st.session_state: st.session_state.veh_glob = None
 if 'lista_sel' not in st.session_state: st.session_state.lista_sel = []
 if 'prod_dia' not in st.session_state: st.session_state.prod_dia = {}
-
 if 'chk_giros' not in st.session_state: st.session_state.chk_giros = False
 if 'chk_aisl' not in st.session_state: st.session_state.chk_aisl = False
 if 'chk_comp' not in st.session_state: st.session_state.chk_comp = False
 if 'last_item_loaded' not in st.session_state: st.session_state.last_item_loaded = None
 
 def on_completo_change():
-    if st.session_state.chk_comp:
-        st.session_state.chk_giros = True
-        st.session_state.chk_aisl = True
+    if st.session_state.chk_comp: st.session_state.chk_giros = True; st.session_state.chk_aisl = True
 
 def ir_a_home(): st.session_state.current_page = "HOME"
 def ir_a_partes(): st.session_state.current_page = "PARTES"
 def ir_a_produccion(): st.session_state.current_page = "PRODUCCION"
-def ir_a_mensulas(): st.session_state.current_page = "MENSULAS"
 
 # ==========================================
 #            CONEXIÓN GOOGLE
@@ -160,7 +125,6 @@ def cambiar_formato_google(ws, fila, col, tipo_estilo):
     try:
         formato_texto = {"fontFamily": "Arial", "foregroundColor": {"red": 0.0, "green": 0.0, "blue": 0.0}, "bold": False}
         formato_fondo = None 
-
         if tipo_estilo == "GIROS":
             formato_texto = {"fontFamily": "Courier New", "foregroundColor": {"red": 1.0, "green": 0.0, "blue": 0.0}, "bold": True}
         elif tipo_estilo == "AISLADORES":
@@ -171,11 +135,9 @@ def cambiar_formato_google(ws, fila, col, tipo_estilo):
         elif tipo_estilo == "GRAPADO_VERDE":
             formato_texto = {"fontFamily": "Arial", "foregroundColor": {"red": 0.0, "green": 0.0, "blue": 0.0}, "bold": True}
             formato_fondo = {"red": 0.4, "green": 0.9, "blue": 0.4} 
-
         user_format = {"textFormat": formato_texto}
         if formato_fondo: user_format["backgroundColor"] = formato_fondo
         campos = "userEnteredFormat(textFormat,backgroundColor)"
-
         body = {"requests": [{"repeatCell": {"range": {"sheetId": ws.id, "startRowIndex": fila - 1, "endRowIndex": fila, "startColumnIndex": col - 1, "endColumnIndex": col}, "cell": {"userEnteredFormat": user_format}, "fields": campos}}]}
         ws.spreadsheet.batch_update(body)
         return True
@@ -191,7 +153,6 @@ def detectar_estilo_celda(ws, fila, col):
             formato = celda_data.get('userEnteredFormat', {})
             font_family = formato.get('textFormat', {}).get('fontFamily', 'Arial')
             bg_color = formato.get('backgroundColor', {})
-            
             if bg_color.get('blue', 0) > 0.8 and bg_color.get('red', 0) < 0.6: return "TENDIDO_AZUL"
             if bg_color.get('green', 0) > 0.7 and bg_color.get('blue', 0) < 0.6: return "GRAPADO_VERDE"
             if 'Courier' in font_family: return "GIROS"
@@ -215,7 +176,9 @@ def cargar_datos_completos_hoja(nombre_archivo, nombre_hoja):
             if not fila: continue
             item_id = str(fila[0]).strip()
             if len(item_id) > 2 and "ITEM" not in item_id.upper() and "HR TRACK" not in item_id.upper():
-                datos_procesados[item_id] = {"fila_excel": i + 1, "datos": fila}
+                # --- AQUÍ INTENTAMOS LEER EL LINK DEL PDF SI EXISTE (Ej. Columna 50) ---
+                link_pdf = safe_val(fila, 50) # Asumiendo que está en la columna AX, ajusta esto luego
+                datos_procesados[item_id] = {"fila_excel": i + 1, "datos": fila, "link_pdf": link_pdf}
         return datos_procesados
     except: return None
 
@@ -287,7 +250,7 @@ def obtener_hojas_track_cached(nombre_archivo):
     except: return []
 
 # ==========================================
-#        GUARDADO
+#        GUARDADO Y PDF
 # ==========================================
 def guardar_parte(fecha, lista, vehiculo, para, id_roster):
     sh = conectar_flexible(id_roster)
@@ -469,8 +432,7 @@ if st.session_state.current_page == "HOME":
     st.markdown("<h1 style='text-align: center;'>🚧 GESTOR DE OBRA SEMI 🚧</h1>", unsafe_allow_html=True)
     st.markdown("---")
     
-    col_1, col_2, col_3 = st.columns(3)
-    
+    col_1, col_2 = st.columns(2)
     with col_1:
         st.markdown("### 📝 CONTROL PERSONAL")
         if st.button("PARTES DE TRABAJO", key="btn_partes", use_container_width=True):
@@ -481,12 +443,6 @@ if st.session_state.current_page == "HOME":
         st.markdown("### 🏗️ CONTROL DE OBRA")
         if st.button("PRODUCCIÓN", key="btn_prod", use_container_width=True):
             ir_a_produccion()
-            st.rerun()
-
-    with col_3:
-        st.markdown("### 📐 TÉCNICA")
-        if st.button("VISOR MÉNSULAS", key="btn_mensulas", use_container_width=True):
-            ir_a_mensulas()
             st.rerun()
             
     st.markdown("---")
@@ -505,7 +461,6 @@ elif st.session_state.current_page == "PARTES":
         st.error("⛔ ¡ALTO! Selecciona tu VEHÍCULO en el menú de la izquierda para continuar.")
     else:
         st.subheader(f"Parte para: {st.session_state.veh_glob}")
-        
         if st.session_state.ID_ROSTER_ACTIVO:
             c1, c2, c3 = st.columns(3)
             hoy = datetime.now()
@@ -514,7 +469,6 @@ elif st.session_state.current_page == "PARTES":
             a = c3.selectbox("Año", [2024,2025,2026], index=1)
             try: fecha_sel = datetime(a,m,d)
             except: fecha_sel = hoy; st.error("Fecha incorrecta")
-            
             st.divider()
             
             fl = st.radio("Filtro:", ["TODOS", "OBRA", "ALMACEN"], horizontal=True)
@@ -632,7 +586,36 @@ elif st.session_state.current_page == "PRODUCCION":
 
                     it = st.selectbox("Perfil a Trabajar", keys_filtradas)
                     
+                    # -------------------------------------------------------------
+                    # VISOR DE PLANOS AUTOMÁTICO (INTEGRADO AQUÍ)
+                    # -------------------------------------------------------------
                     if it:
+                        # SIMULACIÓN: En el futuro esto vendrá del Excel
+                        # Aquí mapeamos el nombre del perfil con una URL de ejemplo
+                        # DEBES CAMBIAR ESTO POR TUS LINKS REALES DE DRIVE
+                        link_plano = datos_completos[it].get("link_pdf")
+                        
+                        # Si no hay link en el excel, ponemos uno de prueba para que veas como funciona
+                        if not link_plano:
+                            link_plano = "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf" 
+
+                        st.markdown("---")
+                        col_info, col_btn_pdf = st.columns([2, 1])
+                        
+                        with col_info:
+                            st.caption("Documentación Técnica Disponible")
+                        
+                        with col_btn_pdf:
+                            # BOTÓN DE APERTURA NATIVA (RÁPIDO Y HD)
+                            st.link_button(
+                                label="📂 ABRIR PLANO TÉCNICO", 
+                                url=link_plano, 
+                                type="primary", 
+                                use_container_width=True
+                            )
+                        st.markdown("---")
+
+                        # --- Lógica del Robot ---
                         if st.session_state.last_item_loaded != it:
                             st.session_state.last_item_loaded = it
                             info = datos_completos[it]
@@ -844,46 +827,3 @@ elif st.session_state.current_page == "PRODUCCION":
                             _, col_btn, _ = st.columns([1, 2, 1])
                             with col_btn: st.link_button(label=f"📨 ENVIAR A {destinatario.upper()}", url=link_whatsapp, type="primary", use_container_width=True)
                             st.caption("🔒 Este mensaje está encriptado de punto a punto por WhatsApp.")
-
-# --- PÁGINA 4: VISOR DE MÉNSULAS ---
-elif st.session_state.current_page == "MENSULAS":
-    if st.button("⬅️ VOLVER AL MENÚ PRINCIPAL"):
-        ir_a_home()
-        st.rerun()
-
-    st.title("📐 Visor Técnico de Ménsulas")
-    st.info("Sube el archivo PDF de la ménsula o plano que deseas consultar.")
-
-    uploaded_file = st.file_uploader("📂 Buscar archivo PDF en el dispositivo", type="pdf")
-
-    if uploaded_file is not None:
-        try:
-            # 1. LEER EL ARCHIVO (IMPORTANTE: HACERLO UNA SOLA VEZ)
-            bytes_data = uploaded_file.getvalue()
-            
-            # 2. BOTÓN DE SEGURIDAD (POR SI CHROME BLOQUEA)
-            st.warning("⚠️ Si no ves el plano abajo, pulsa este botón:")
-            st.download_button(
-                label="📥 ABRIR PLANO (PANTALLA COMPLETA)", 
-                data=bytes_data, 
-                file_name=uploaded_file.name, 
-                mime="application/pdf", 
-                type="primary", 
-                use_container_width=True
-            )
-            
-            st.markdown("---")
-            
-            # 3. INTENTO DE VISUALIZACIÓN (EMBED EN LUGAR DE IFRAME)
-            base64_pdf = base64.b64encode(bytes_data).decode('utf-8')
-            
-            # Usamos OBJECT, que es más respetuoso con navegadores modernos
-            pdf_display = f"""
-            <object data="data:application/pdf;base64,{base64_pdf}" type="application/pdf" class="pdf-object">
-                <p>Tu navegador no puede mostrar el PDF aquí. Pulsa el botón de arriba para descargarlo.</p>
-            </object>
-            """
-            st.markdown(pdf_display, unsafe_allow_html=True)
-            
-        except Exception as e:
-            st.error(f"Error al cargar el PDF: {e}")
