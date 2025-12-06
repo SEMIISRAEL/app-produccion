@@ -75,6 +75,14 @@ st.markdown("""
     [data-testid="stSidebar"] {
         background-color: #f0f2f6;
     }
+    
+    /* Estilo para el Visor PDF */
+    .pdf-object {
+        width: 100%;
+        height: 100vh; /* Altura pantalla completa */
+        border: 2px solid #ccc;
+        border-radius: 10px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -850,15 +858,32 @@ elif st.session_state.current_page == "MENSULAS":
 
     if uploaded_file is not None:
         try:
-            # Convertir a Base64
-            base64_pdf = base64.b64encode(uploaded_file.read()).decode('utf-8')
+            # 1. LEER EL ARCHIVO (IMPORTANTE: HACERLO UNA SOLA VEZ)
+            bytes_data = uploaded_file.getvalue()
             
-            # Usar EMBED (Método más compatible con Chrome que iframe)
-            pdf_display = f'<embed src="data:application/pdf;base64,{base64_pdf}" width="100%" height="1000px" type="application/pdf">'
+            # 2. BOTÓN DE SEGURIDAD (POR SI CHROME BLOQUEA)
+            st.warning("⚠️ Si no ves el plano abajo, pulsa este botón:")
+            st.download_button(
+                label="📥 ABRIR PLANO (PANTALLA COMPLETA)", 
+                data=bytes_data, 
+                file_name=uploaded_file.name, 
+                mime="application/pdf", 
+                type="primary", 
+                use_container_width=True
+            )
             
-            # Mostrar
+            st.markdown("---")
+            
+            # 3. INTENTO DE VISUALIZACIÓN (EMBED EN LUGAR DE IFRAME)
+            base64_pdf = base64.b64encode(bytes_data).decode('utf-8')
+            
+            # Usamos OBJECT, que es más respetuoso con navegadores modernos
+            pdf_display = f"""
+            <object data="data:application/pdf;base64,{base64_pdf}" type="application/pdf" class="pdf-object">
+                <p>Tu navegador no puede mostrar el PDF aquí. Pulsa el botón de arriba para descargarlo.</p>
+            </object>
+            """
             st.markdown(pdf_display, unsafe_allow_html=True)
-            st.success(f"✅ Visualizando: {uploaded_file.name}")
             
         except Exception as e:
             st.error(f"Error al cargar el PDF: {e}")
